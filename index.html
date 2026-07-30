@@ -1,0 +1,766 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<title>Koni Kapmaca</title>
+<style>
+  html,body{margin:0;padding:0;overflow:hidden;background:#111;font-family:system-ui,Arial,sans-serif;color:#fff;}
+  canvas{display:block;}
+  #ui{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;z-index:10;}
+  .panel{background:rgba(20,20,25,0.92);border:1px solid #333;border-radius:16px;padding:28px 24px;max-width:380px;width:90%;text-align:center;}
+  h1{font-size:22px;margin:0 0 16px;}
+  input{width:100%;box-sizing:border-box;padding:12px;font-size:16px;border-radius:8px;border:1px solid #444;background:#1a1a1e;color:#fff;margin-bottom:10px;text-align:center;}
+  button{width:100%;padding:12px;font-size:16px;border:none;border-radius:8px;background:#4f7cff;color:#fff;font-weight:600;margin-top:6px;cursor:pointer;}
+  button.secondary{background:#333;}
+  button:disabled{opacity:0.5;}
+  .code{font-size:26px;letter-spacing:2px;font-weight:700;background:#000;border-radius:8px;padding:10px;margin:10px 0;user-select:all;}
+  .hint{font-size:13px;color:#999;margin-top:8px;line-height:1.4;}
+  #hud{position:fixed;top:10px;left:10px;right:10px;display:flex;justify-content:space-between;z-index:5;pointer-events:none;font-size:14px;}
+  .scorebox{background:rgba(0,0,0,0.55);padding:6px 10px;border-radius:8px;margin-bottom:4px;}
+  #controlsHint{position:fixed;bottom:10px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,0.55);padding:6px 12px;border-radius:8px;font-size:13px;z-index:5;}
+  .playerRow{display:flex;align-items:center;gap:8px;padding:4px 0;font-size:14px;}
+  .dot{width:12px;height:12px;border-radius:50%;flex-shrink:0;}
+  #joinBtns{display:flex;gap:8px;}
+  #joinBtns button{margin-top:0;}
+  .hidden{display:none !important;}
+  #touchControls{position:fixed;inset:0;pointer-events:none;z-index:6;}
+  #joystickBase{position:absolute;left:22px;bottom:26px;width:112px;height:112px;border-radius:50%;background:rgba(255,255,255,0.12);border:2px solid rgba(255,255,255,0.35);pointer-events:auto;touch-action:none;}
+  #joystickKnob{position:absolute;left:36px;top:36px;width:40px;height:40px;border-radius:50%;background:rgba(255,255,255,0.6);}
+  #touchButtons{position:absolute;right:18px;bottom:26px;display:flex;flex-direction:column;gap:12px;pointer-events:auto;align-items:center;}
+  .tbtn{width:60px;height:60px;border-radius:50%;border:2px solid rgba(255,255,255,0.4);background:rgba(255,255,255,0.15);color:#fff;font-size:22px;touch-action:none;display:flex;align-items:center;justify-content:center;}
+  #lookArea{position:fixed;top:0;right:0;width:58%;height:100%;z-index:4;touch-action:none;}
+</style>
+</head>
+<body>
+
+<div id="ui">
+  <div class="panel" id="landing">
+    <h1>🚩 Koni Kapmaca</h1>
+    <div class="hint">Arkadaşlarınla uzaktan oyna. Biri oda kurar, diğerleri koda katılır.</div>
+    <button id="hostBtn">Oda Kur</button>
+    <div id="joinArea" style="margin-top:14px;">
+      <input id="joinCode" placeholder="Oda kodunu gir" autocomplete="off">
+      <button class="secondary" id="joinBtn">Odaya Katıl</button>
+    </div>
+  </div>
+
+  <div class="panel hidden" id="lobby">
+    <h1>Lobi</h1>
+    <div id="roomCodeBox" class="hidden">
+      <div class="hint">Bu kodu arkadaşlarına gönder:</div>
+      <div class="code" id="roomCode"></div>
+    </div>
+    <div id="playerList"></div>
+    <div class="hint" id="lobbyDebug" style="font-size:11px;color:#888;"></div>
+    <button id="startBtn" class="hidden">Oyunu Başlat</button>
+    <div class="hint" id="waitHint">Kurucunun başlatmasını bekle...</div>
+  </div>
+
+  <div class="panel hidden" id="gameover">
+    <h1 id="winnerText">🎉 Kazandı!</h1>
+    <button id="restartBtn">Yeniden Başa Dön</button>
+  </div>
+</div>
+
+<div id="hud" class="hidden">
+  <div id="scoreboard"></div>
+  <div class="scorebox" id="myColorBox"></div>
+  <div class="scorebox" id="coneDebug" style="font-size:10px;"></div>
+</div>
+<div id="controlsHint" class="hidden">WASD: Hareket • Fare: Kamera (tıkla ve sürükle) • E: Al/Bırak • Space: Fırlat • C: Kamera Modu</div>
+
+<div id="lookArea" class="hidden"></div>
+<div id="touchControls" class="hidden">
+  <div id="joystickBase"><div id="joystickKnob"></div></div>
+  <div id="touchButtons">
+    <button class="tbtn" id="btnCam">🔄</button>
+    <button class="tbtn" id="btnInteract">✋</button>
+    <button class="tbtn" id="btnThrow">🎯</button>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/firebase/12.15.0/firebase-compat.min.js"></script>
+<script>
+try{
+  const firebaseConfig = {
+    apiKey: "AIzaSyBkBar8IsRKNAoc2F2VHenNfkjWyWFI0iA",
+    authDomain: "koni-kapmaca.firebaseapp.com",
+    databaseURL: "https://koni-kapmaca-default-rtdb.firebaseio.com",
+    projectId: "koni-kapmaca",
+    storageBucket: "koni-kapmaca.firebasestorage.app",
+    messagingSenderId: "395594831760",
+    appId: "1:395594831760:web:dc3288cef377fc4a92c515"
+  };
+  firebase.initializeApp(firebaseConfig);
+  window.fbdb = firebase.database();
+}catch(e){ console.error('Firebase init failed', e); }
+</script>
+<script>
+try{
+if(typeof THREE==='undefined' || typeof CANNON==='undefined'){
+  throw new Error('Kütüphaneler yüklenemedi. THREE:'+(typeof THREE)+' CANNON:'+(typeof CANNON));
+}
+if(typeof window.fbdb==='undefined'){
+  throw new Error('Firebase bağlantısı kurulamadı. İnternet bağlantını kontrol et ve sayfayı yenile.');
+}
+// ---------- Config ----------
+const ARENA = 20;
+const ZONE_R = 4.2;
+const PICKUP_R = 2.3;
+const MOVE_SPEED = 7.5;
+const THROW_FORCE = 11;
+const NEED_TO_WIN = 3;
+const COLORS = [0x4c9a63, 0x8b5fbf, 0xb5433c, 0x3f6fb0];
+const COLOR_NAMES = ["Yeşil","Mor","Kırmızı","Mavi"];
+const ZONES = [
+  {x:0, z:-ARENA*0.62}, {x:ARENA*0.62, z:0}, {x:0, z:ARENA*0.62}, {x:-ARENA*0.62, z:0}
+];
+
+// ---------- Networking state ----------
+let isHost=false;
+let roomCode=null;
+let myId='p_'+Math.random().toString(36).slice(2,9);
+let players={};
+let hostLobbyTimer=null, clientLobbyTimer=null, hostSyncTimer=null, clientInputTimer=null, clientStateTimer=null;
+let phase='landing'; // landing, lobby, playing, ended
+
+const myKeys={up:false,down:false,left:false,right:false,interact:false,throw:false};
+let myFacing={x:0,z:1};
+
+// ---------- UI refs ----------
+const $=id=>document.getElementById(id);
+const landing=$('landing'), lobby=$('lobby'), gameover=$('gameover'), ui=$('ui');
+const hud=$('hud'), controlsHint=$('controlsHint');
+
+function showPanel(name){
+  landing.classList.add('hidden'); lobby.classList.add('hidden'); gameover.classList.add('hidden');
+  ui.classList.remove('hidden');
+  if(name==='landing') landing.classList.remove('hidden');
+  if(name==='lobby') lobby.classList.remove('hidden');
+  if(name==='gameover') gameover.classList.remove('hidden');
+  if(name==='playing') ui.classList.add('hidden');
+}
+
+// ---------- Three.js setup ----------
+const scene=new THREE.Scene();
+scene.background=new THREE.Color(0x0d1117);
+const camera=new THREE.PerspectiveCamera(45, innerWidth/innerHeight, 0.1, 200);
+camera.position.set(0, ARENA*1.35, ARENA*1.15);
+camera.lookAt(0,0,0);
+const renderer=new THREE.WebGLRenderer({antialias:true});
+renderer.setSize(innerWidth, innerHeight);
+renderer.shadowMap.enabled=true;
+document.body.appendChild(renderer.domElement);
+
+addEventListener('resize',()=>{
+  camera.aspect=innerWidth/innerHeight; camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+const hemi=new THREE.HemisphereLight(0xffffff,0x223344,0.9); scene.add(hemi);
+const sun=new THREE.DirectionalLight(0xffffff,1.0);
+sun.position.set(10,20,10); sun.castShadow=true;
+sun.shadow.mapSize.set(1024,1024);
+sun.shadow.camera.left=-25; sun.shadow.camera.right=25; sun.shadow.camera.top=25; sun.shadow.camera.bottom=-25;
+scene.add(sun);
+
+const ground=new THREE.Mesh(
+  new THREE.PlaneGeometry(ARENA*2.2, ARENA*2.2),
+  new THREE.MeshStandardMaterial({color:0x1c2430})
+);
+ground.rotation.x=-Math.PI/2; ground.receiveShadow=true; scene.add(ground);
+
+// grid
+const grid=new THREE.GridHelper(ARENA*2.2, 22, 0x2a3644, 0x222c38);
+scene.add(grid);
+
+// zones
+const zoneMeshes=[];
+ZONES.forEach((z,i)=>{
+  const m=new THREE.Mesh(
+    new THREE.CircleGeometry(ZONE_R, 40),
+    new THREE.MeshStandardMaterial({color:COLORS[i], transparent:true, opacity:0.35, roughness:1, metalness:0, emissive:COLORS[i], emissiveIntensity:0.08})
+  );
+  m.rotation.x=-Math.PI/2; m.position.set(z.x,0.02,z.z); m.receiveShadow=true;
+  scene.add(m); zoneMeshes.push(m);
+});
+
+// center marker (visual proof of exact map center)
+const centerPole=new THREE.Mesh(new THREE.CylinderGeometry(0.08,0.08,3,8), new THREE.MeshStandardMaterial({color:0xffffff, emissive:0xffffff, emissiveIntensity:0.6}));
+centerPole.position.set(0,1.5,0);
+scene.add(centerPole);
+const centerRing=new THREE.Mesh(new THREE.RingGeometry(0.6,0.75,32), new THREE.MeshBasicMaterial({color:0xffffff, side:THREE.DoubleSide}));
+centerRing.rotation.x=-Math.PI/2; centerRing.position.set(0,0.03,0);
+scene.add(centerRing);
+
+// ---------- Physics world ----------
+const world=new CANNON.World();
+world.gravity.set(0,-18,0);
+world.solver.iterations=20;
+world.defaultContactMaterial.friction=0.45;
+world.defaultContactMaterial.restitution=0.15;
+world.defaultContactMaterial.contactEquationStiffness=5e6;
+world.defaultContactMaterial.contactEquationRelaxation=4;
+const groundBody=new CANNON.Body({type:CANNON.Body.STATIC, shape:new CANNON.Box(new CANNON.Vec3(ARENA*1.5, 0.5, ARENA*1.5))});
+groundBody.position.set(0,-0.5,0);
+world.addBody(groundBody);
+
+// invisible walls (axis-aligned boxes, no rotation needed)
+const wallDefs=[
+  {pos:[0,5,ARENA+1], half:[ARENA+2,5,1]},
+  {pos:[0,5,-ARENA-1], half:[ARENA+2,5,1]},
+  {pos:[ARENA+1,5,0], half:[1,5,ARENA+2]},
+  {pos:[-ARENA-1,5,0], half:[1,5,ARENA+2]},
+];
+wallDefs.forEach(w=>{
+  const body=new CANNON.Body({type:CANNON.Body.STATIC, shape:new CANNON.Box(new CANNON.Vec3(...w.half))});
+  body.position.set(...w.pos);
+  world.addBody(body);
+});
+
+// ---------- Cones ----------
+const NUM_CONES=5;
+let cones=[]; // {body, mesh, held(id|null)}
+function makeCone(x,z){
+  const geo=new THREE.ConeGeometry(0.55,1.1,16);
+  const mat=new THREE.MeshStandardMaterial({color:0xd4691e, roughness:0.9, metalness:0});
+  const mesh=new THREE.Mesh(geo,mat); mesh.castShadow=true;
+  scene.add(mesh);
+  const shape=new CANNON.Sphere(0.55);
+  const body=new CANNON.Body({mass:1, shape, position:new CANNON.Vec3(x,0.55,z), linearDamping:0.7, angularDamping:0.9});
+  body.sleepSpeedLimit=0.15; body.sleepTimeLimit=0.3;
+  world.addBody(body);
+  return {body, mesh, held:null};
+}
+function resetCones(numPlayers){
+  cones.forEach(c=>{ scene.remove(c.mesh); world.removeBody(c.body); });
+  cones=[];
+  const r=1.5;
+  for(let i=0;i<NUM_CONES;i++){
+    const a=(i/NUM_CONES)*Math.PI*2 - Math.PI/2;
+    cones.push(makeCone(Math.cos(a)*r, Math.sin(a)*r));
+  }
+}
+
+// ---------- Player meshes ----------
+const playerMeshes={}; // id -> mesh
+function ensurePlayerMesh(id, colorIdx){
+  if(playerMeshes[id]) return playerMeshes[id];
+  const g=new THREE.Group();
+  const body=new THREE.Mesh(new THREE.CylinderGeometry(0.5,0.5,1.3,12), new THREE.MeshStandardMaterial({color:COLORS[colorIdx], roughness:1, metalness:0}));
+  body.position.y=0.95; body.castShadow=true;
+  const head=new THREE.Mesh(new THREE.SphereGeometry(0.32,12,12), new THREE.MeshStandardMaterial({color:0xffe0c0}));
+  head.position.y=1.7; head.castShadow=true;
+  g.add(body); g.add(head);
+  scene.add(g);
+  playerMeshes[id]=g;
+  return g;
+}
+
+// ---------- Touch controls ----------
+const isTouch = ('ontouchstart' in window) || navigator.maxTouchPoints>0;
+const touchControls=$('touchControls');
+if(isTouch){
+  const joyBase=$('joystickBase'), joyKnob=$('joystickKnob');
+  let joyId=null;
+  function updateJoystick(e){
+    const rect=joyBase.getBoundingClientRect();
+    const cx=rect.left+rect.width/2, cy=rect.top+rect.height/2;
+    const dx=e.clientX-cx, dy=e.clientY-cy;
+    const maxR=rect.width/2;
+    const dist=Math.min(Math.hypot(dx,dy), maxR);
+    const angle=Math.atan2(dy,dx);
+    joyKnob.style.transform=`translate(${Math.cos(angle)*dist}px,${Math.sin(angle)*dist}px)`;
+    const nx=dx/maxR, ny=dy/maxR, dead=0.25;
+    myKeys.left = nx<-dead; myKeys.right = nx>dead;
+    myKeys.up = ny<-dead; myKeys.down = ny>dead;
+  }
+  function endJoy(e){
+    if(joyId!==null && e.pointerId!==joyId) return;
+    joyId=null; joyKnob.style.transform='translate(0,0)';
+    myKeys.up=myKeys.down=myKeys.left=myKeys.right=false;
+  }
+  joyBase.addEventListener('pointerdown', e=>{ joyId=e.pointerId; joyBase.setPointerCapture(joyId); updateJoystick(e); });
+  joyBase.addEventListener('pointermove', e=>{ if(joyId===e.pointerId) updateJoystick(e); });
+  joyBase.addEventListener('pointerup', endJoy);
+  joyBase.addEventListener('pointercancel', endJoy);
+  $('btnInteract').addEventListener('pointerdown', ()=>{ myKeys.interact=true; });
+  $('btnInteract').addEventListener('pointerup', ()=>{ myKeys.interact=false; });
+  $('btnInteract').addEventListener('pointercancel', ()=>{ myKeys.interact=false; });
+  $('btnThrow').addEventListener('pointerdown', ()=>{ myKeys.throw=true; });
+  $('btnThrow').addEventListener('pointerup', ()=>{ myKeys.throw=false; });
+  $('btnThrow').addEventListener('pointercancel', ()=>{ myKeys.throw=false; });
+  $('btnCam').addEventListener('pointerdown', ()=>{ cycleCamera(); });
+}
+function showTouchControlsIfNeeded(){ if(isTouch){ touchControls.classList.remove('hidden'); $('lookArea').classList.remove('hidden'); controlsHint.textContent='Joystick: Hareket • Sağ taraf sürükle: Kamera • ✋: Al/Bırak • 🎯: Fırlat • 🔄: Kamera Modu'; } }
+function hideTouchControls(){ touchControls.classList.add('hidden'); $('lookArea').classList.add('hidden'); }
+
+// ---------- Input ----------
+addEventListener('keydown',e=>setKey(e.code,true));
+addEventListener('keyup',e=>setKey(e.code,false));
+function setKey(code,val){
+  if(['KeyW','ArrowUp'].includes(code)) myKeys.up=val;
+  if(['KeyS','ArrowDown'].includes(code)) myKeys.down=val;
+  if(['KeyA','ArrowLeft'].includes(code)) myKeys.left=val;
+  if(['KeyD','ArrowRight'].includes(code)) myKeys.right=val;
+  if(code==='KeyE') myKeys.interact=val;
+  if(code==='Space') myKeys.throw=val;
+  if(code==='KeyC' && val) cycleCamera();
+}
+let cameraMode='third'; // third | first | top
+function cycleCamera(){
+  cameraMode = cameraMode==='third' ? 'first' : cameraMode==='first' ? 'top' : 'third';
+}
+let camYaw=0, camPitch=0.35;
+const YAW_SENS=0.0032, PITCH_SENS=0.0032;
+const PITCH_MIN=-0.65, PITCH_MAX=1.05;
+const camPos=new THREE.Vector3(0,ARENA*1.35,ARENA*1.15);
+const camLook=new THREE.Vector3(0,0,0);
+function updateCamera(myP, myMeshId){
+  if(!myP){ renderer.render(scene,camera); return; }
+  const yaw=camYaw, pitch=camPitch;
+  const fx=Math.sin(yaw), fz=Math.cos(yaw);
+  let targetPos, targetLook;
+  if(cameraMode==='top'){
+    targetPos=new THREE.Vector3(myP.x, ARENA*1.1, myP.z+ARENA*0.9);
+    targetLook=new THREE.Vector3(myP.x,0,myP.z);
+  } else if(cameraMode==='first'){
+    const dx=fx*Math.cos(pitch), dz=fz*Math.cos(pitch), dy=Math.sin(pitch);
+    targetPos=new THREE.Vector3(myP.x+fx*0.35, 1.65, myP.z+fz*0.35);
+    targetLook=new THREE.Vector3(myP.x+fx*0.35+dx*10, 1.65+dy*10, myP.z+fz*0.35+dz*10);
+  } else {
+    const dist=6, horiz=dist*Math.cos(pitch);
+    targetPos=new THREE.Vector3(myP.x-fx*horiz, 3.2+dist*Math.sin(pitch), myP.z-fz*horiz);
+    targetLook=new THREE.Vector3(myP.x, 1.1, myP.z);
+  }
+  camPos.lerp(targetPos, 0.22);
+  camLook.lerp(targetLook, 0.3);
+  camera.position.copy(camPos);
+  camera.lookAt(camLook);
+  if(myMeshId && playerMeshes[myMeshId]) playerMeshes[myMeshId].visible = cameraMode!=='first';
+  renderer.render(scene,camera);
+}
+
+// ---------- Look controls (mouse / touch-drag, independent of movement) ----------
+let mouseLookDown=false, lastMX=0, lastMY=0;
+renderer.domElement.addEventListener('pointerdown', e=>{
+  if(isTouchDevice || phase!=='playing') return;
+  mouseLookDown=true; lastMX=e.clientX; lastMY=e.clientY;
+});
+window.addEventListener('pointerup', ()=>{ mouseLookDown=false; });
+window.addEventListener('pointermove', e=>{
+  if(!mouseLookDown || isTouchDevice) return;
+  const dx=e.clientX-lastMX, dy=e.clientY-lastMY;
+  camYaw -= dx*YAW_SENS*1.6;
+  camPitch -= dy*PITCH_SENS*1.6;
+  camPitch=Math.max(PITCH_MIN, Math.min(PITCH_MAX, camPitch));
+  lastMX=e.clientX; lastMY=e.clientY;
+});
+const isTouchDevice = ('ontouchstart' in window) || navigator.maxTouchPoints>0;
+if(isTouchDevice){
+  const lookArea=$('lookArea');
+  let lookId=null, lookLastX=0, lookLastY=0;
+  const T_YAW_SENS=0.007, T_PITCH_SENS=0.007;
+  lookArea.addEventListener('pointerdown', e=>{ lookId=e.pointerId; lookLastX=e.clientX; lookLastY=e.clientY; lookArea.setPointerCapture(lookId); });
+  lookArea.addEventListener('pointermove', e=>{
+    if(e.pointerId!==lookId) return;
+    const dx=e.clientX-lookLastX, dy=e.clientY-lookLastY;
+    camYaw -= dx*T_YAW_SENS;
+    camPitch -= dy*T_PITCH_SENS;
+    camPitch=Math.max(PITCH_MIN, Math.min(PITCH_MAX, camPitch));
+    lookLastX=e.clientX; lookLastY=e.clientY;
+  });
+  lookArea.addEventListener('pointerup', e=>{ if(e.pointerId===lookId) lookId=null; });
+  lookArea.addEventListener('pointercancel', e=>{ if(e.pointerId===lookId) lookId=null; });
+}
+
+// ---------- Storage helpers (Firebase Realtime Database) ----------
+function keyToPath(key){ return key.split(':').join('/'); }
+async function storeSet(key,val){
+  const path=keyToPath(key);
+  for(let attempt=0; attempt<3; attempt++){
+    try{
+      await window.fbdb.ref(path).set(val);
+      return true;
+    }catch(e){ console.error('storage set fail', key, e); }
+    if(attempt<2) await new Promise(res=>setTimeout(res, 400));
+  }
+  return null;
+}
+async function storeGet(key){
+  const path=keyToPath(key);
+  for(let attempt=0; attempt<2; attempt++){
+    try{
+      const snap=await window.fbdb.ref(path).once('value');
+      const v=snap.val();
+      return (v===undefined)?null:v;
+    }catch(e){ /* key may just not exist yet */ }
+    if(attempt<1) await new Promise(res=>setTimeout(res, 300));
+  }
+  return null;
+}
+async function storeListKeys(prefixKey){
+  const path=keyToPath(prefixKey);
+  try{
+    const snap=await window.fbdb.ref(path).once('value');
+    const val=snap.val();
+    if(!val) return [];
+    return Object.keys(val).map(cid=>prefixKey+cid);
+  }catch(e){ console.error('storage list fail', prefixKey, e); return []; }
+}
+function genRoomCode(){
+  const chars='ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; let s='';
+  for(let i=0;i<4;i++) s+=chars[Math.floor(Math.random()*chars.length)];
+  return s;
+}
+const kLobby=()=>'koni:'+roomCode+':lobby';
+const kJoin=cid=>'koni:'+roomCode+':join:'+cid;
+const kInput=cid=>'koni:'+roomCode+':input:'+cid;
+const kState=()=>'koni:'+roomCode+':state';
+function publicPlayers(){
+  return Object.fromEntries(Object.entries(players).map(([id,p])=>[id,{color:p.color,zoneIdx:p.zoneIdx,name:p.name}]));
+}
+
+// ---------- Networking setup ----------
+$('hostBtn').onclick=async ()=>{
+  isHost=true; myId='host';
+  roomCode=genRoomCode();
+  players={ host:{color:0, zoneIdx:0, x:ZONES[0].x, z:ZONES[0].z, holding:null, score:0, keys:{}, prevKeys:{}, name:'Kurucu'} };
+  $('roomCode').textContent=roomCode;
+  $('roomCodeBox').classList.remove('hidden');
+  $('startBtn').classList.remove('hidden');
+  $('waitHint').classList.add('hidden');
+  showPanel('lobby'); renderLobby(); phase='lobby';
+  await storeSet(kLobby(), {players: publicPlayers(), started:false});
+  pollJoinRequests();
+  hostLobbyTimer=setInterval(pollJoinRequests, 1200);
+};
+
+async function pollJoinRequests(){
+  if(phase!=='lobby' || !isHost) return;
+  const dbg=$('lobbyDebug');
+  try{
+    const keys=await storeListKeys('koni:'+roomCode+':join:');
+    let changed=false;
+    for(const k of keys){
+      const cid=k.split(':').pop();
+      if(!players[cid] && Object.keys(players).length<4){
+        const data=await storeGet(k);
+        if(data){
+          const idx=Object.keys(players).length;
+          players[cid]={color:idx, zoneIdx:idx, x:ZONES[idx].x, z:ZONES[idx].z, holding:null, score:0, keys:{}, prevKeys:{}, name:data.name||('Oyuncu '+(idx+1))};
+          changed=true;
+        }
+      }
+    }
+    if(changed){ renderLobby(); await storeSet(kLobby(), {players: publicPlayers(), started:false}); }
+    if(dbg) dbg.textContent='Son kontrol: '+new Date().toLocaleTimeString()+' • bulunan katılım isteği: '+keys.length+' • oda: '+roomCode;
+  }catch(e){ console.error(e); if(dbg) dbg.textContent='Hata: '+e.message; }
+}
+
+$('joinBtn').onclick=async ()=>{
+  const code=$('joinCode').value.trim().toUpperCase();
+  if(!code) return;
+  isHost=false; roomCode=code;
+  await storeSet(kJoin(myId), {name:'Oyuncu'});
+  showPanel('lobby'); $('waitHint').classList.remove('hidden'); phase='lobby';
+  pollLobbyAsClient();
+  clientLobbyTimer=setInterval(pollLobbyAsClient, 1200);
+};
+
+async function pollLobbyAsClient(){
+  if(phase!=='lobby' || isHost) return;
+  const dbg=$('lobbyDebug');
+  try{
+    const lobby=await storeGet(kLobby());
+    if(dbg) dbg.textContent='Son kontrol: '+new Date().toLocaleTimeString()+' • lobi verisi: '+(lobby? 'bulundu ('+Object.keys(lobby.players).length+' oyuncu)':'BULUNAMADI')+' • oda: '+roomCode;
+    if(lobby){
+      players=Object.fromEntries(Object.entries(lobby.players).map(([id,p])=>[id,{...p}]));
+      renderLobby();
+      if(lobby.started){
+        clearInterval(clientLobbyTimer);
+        startGameClientView();
+        startClientNetworking();
+      }
+    }
+  }catch(e){ if(dbg) dbg.textContent='Hata: '+e.message; }
+}
+
+function renderLobby(){
+  const list=$('playerList'); list.innerHTML='';
+  Object.entries(players).forEach(([id,p])=>{
+    const row=document.createElement('div'); row.className='playerRow';
+    const dot=document.createElement('div'); dot.className='dot'; dot.style.background='#'+COLORS[p.color].toString(16).padStart(6,'0');
+    row.appendChild(dot);
+    const txt=document.createElement('div'); txt.textContent=p.name+' — '+COLOR_NAMES[p.color];
+    row.appendChild(txt); list.appendChild(row);
+  });
+}
+$('startBtn').onclick=async ()=>{
+  if(!isHost) return;
+  clearInterval(hostLobbyTimer);
+  await storeSet(kLobby(), {players: publicPlayers(), started:true});
+  startGame();
+  startHostNetworking();
+};
+
+// ---------- Game start ----------
+let myColorIdx=0, myZoneIdx=0;
+function startGame(){
+  resetCones(Object.keys(players).length);
+  showPanel('playing'); hud.classList.remove('hidden'); controlsHint.classList.remove('hidden');
+  showTouchControlsIfNeeded();
+  myColorIdx=players['host'].color; myZoneIdx=players['host'].zoneIdx;
+  $('myColorBox').textContent='Sen: '+COLOR_NAMES[myColorIdx];
+  camYaw=Math.atan2(-players['host'].x, -players['host'].z);
+  camPos.set(players['host'].x-Math.sin(camYaw)*6, 3.2, players['host'].z-Math.cos(camYaw)*6);
+  phase='playing';
+}
+function startGameClientView(){
+  showPanel('playing'); hud.classList.remove('hidden'); controlsHint.classList.remove('hidden');
+  showTouchControlsIfNeeded();
+  const me=players[myId];
+  if(me){
+    myColorIdx=me.color; myZoneIdx=me.zoneIdx; $('myColorBox').textContent='Sen: '+COLOR_NAMES[myColorIdx];
+    const sx=ZONES[me.zoneIdx].x, sz=ZONES[me.zoneIdx].z;
+    camYaw=Math.atan2(-sx, -sz);
+    camPos.set(sx-Math.sin(camYaw)*6, 3.2, sz-Math.cos(camYaw)*6);
+  }
+  phase='playing';
+}
+
+$('restartBtn').onclick=()=>location.reload();
+
+// ---------- Host simulation ----------
+const clock=new THREE.Clock();
+function computeMoveDir(k, yaw){
+  const fx=Math.sin(yaw), fz=Math.cos(yaw);
+  const rx=Math.cos(yaw), rz=-Math.sin(yaw);
+  let mx=0,mz=0;
+  if(k.up){ mx+=fx; mz+=fz; }
+  if(k.down){ mx-=fx; mz-=fz; }
+  if(k.right){ mx+=rx; mz+=rz; }
+  if(k.left){ mx-=rx; mz-=rz; }
+  const len=Math.hypot(mx,mz);
+  if(len>0.001){ mx/=len; mz/=len; } else { mx=0; mz=0; }
+  return {x:mx, z:mz};
+}
+function hostTick(dt){
+  // update own keys/yaw
+  players['host'].keys=myKeys;
+  players['host'].yaw=camYaw;
+  Object.entries(players).forEach(([id,p])=>{
+    const k=p.keys||{};
+    const yaw=p.yaw||0;
+    const dir=computeMoveDir(k, yaw);
+    p.x=Math.max(-ARENA+0.5,Math.min(ARENA-0.5, p.x+dir.x*MOVE_SPEED*dt));
+    p.z=Math.max(-ARENA+0.5,Math.min(ARENA-0.5, p.z+dir.z*MOVE_SPEED*dt));
+    p.facing={x:Math.sin(yaw), z:Math.cos(yaw)};
+    p.prevKeys=p.prevKeys||{};
+    // interact edge
+    if(k.interact && !p.prevKeys.interact){
+      if(p.holding===null){
+        let best=-1, bestD=PICKUP_R;
+        cones.forEach((c,i)=>{
+          if(c.held!==null) return;
+          const d=Math.hypot(c.body.position.x-p.x, c.body.position.z-p.z);
+          if(d<bestD){ bestD=d; best=i; }
+        });
+        if(best>=0){
+          cones[best].held=id; p.holding=best;
+          const cb=cones[best].body;
+          cb.wakeUp();
+          cb.velocity.set(0,0,0); cb.angularVelocity.set(0,0,0);
+          cb.type=CANNON.Body.KINEMATIC; cb.collisionResponse=false;
+        }
+      } else {
+        const c=cones[p.holding];
+        c.held=null;
+        c.body.velocity.set(0,0,0); c.body.angularVelocity.set(0,0,0);
+        c.body.type=CANNON.Body.DYNAMIC; c.body.collisionResponse=true;
+        c.body.sleep();
+        p.holding=null;
+      }
+    }
+    // throw edge
+    if(k.throw && !p.prevKeys.throw && p.holding!==null){
+      const c=cones[p.holding];
+      c.held=null;
+      c.body.angularVelocity.set(0,0,0);
+      c.body.type=CANNON.Body.DYNAMIC; c.body.collisionResponse=true; c.body.wakeUp();
+      const f=p.facing||{x:0,z:1};
+      c.body.velocity.set(f.x*THROW_FORCE, 4, f.z*THROW_FORCE);
+      p.holding=null;
+    }
+    p.prevKeys={...k};
+  });
+
+  // safety clamp: prevent physics explosions/teleports from old cannon.js instability
+  cones.forEach(c=>{
+    const b=c.body;
+    if(!isFinite(b.position.x)||!isFinite(b.position.y)||!isFinite(b.position.z)||b.position.y>15){
+      b.position.set((Math.random()-0.5)*6, 3, (Math.random()-0.5)*6);
+      b.velocity.set(0,0,0); b.angularVelocity.set(0,0,0);
+    } else if(b.velocity.length()>18){
+      b.velocity.scale(18/b.velocity.length(), b.velocity);
+    }
+  });
+
+  // held cones follow players
+  Object.entries(players).forEach(([id,p])=>{
+    if(p.holding!==null){
+      const c=cones[p.holding];
+      const f=p.facing||{x:0,z:1};
+      c.body.position.set(p.x+f.x*1.1, 1.1, p.z+f.z*1.1);
+      c.body.velocity.set(0,0,0);
+    }
+  });
+
+  world.step(1/60, dt, 5);
+
+  // scoring
+  Object.values(players).forEach(p=>{
+    const zone=ZONES[p.zoneIdx];
+    let count=0;
+    cones.forEach(c=>{
+      if(c.held!==null) return;
+      const d=Math.hypot(c.body.position.x-zone.x, c.body.position.z-zone.z);
+      const speed=c.body.velocity.length();
+      if(d<ZONE_R && speed<0.6) count++;
+    });
+    p.score=count;
+  });
+  const winner=Object.entries(players).find(([id,p])=>p.score>=NEED_TO_WIN);
+  if(winner){
+    const [wid,wp]=winner;
+    gameEnded=true; endGame(wp.name, wp.color);
+    syncHostNetwork();
+  }
+
+  maybeSyncHost(dt);
+  renderFrame();
+}
+let netAccum=0, netBusy=false, gameEnded=false;
+function maybeSyncHost(dt){
+  netAccum+=dt*1000;
+  if(netAccum>450 && !netBusy){
+    netAccum=0; netBusy=true;
+    syncHostNetwork().finally(()=>netBusy=false);
+  }
+}
+async function syncHostNetwork(){
+  const nonHost=Object.keys(players).filter(id=>id!=='host');
+  const results=await Promise.all(nonHost.map(id=>storeGet(kInput(id))));
+  nonHost.forEach((id,i)=>{ if(results[i] && results[i].keys){ players[id].keys=results[i].keys; players[id].yaw=results[i].yaw||0; } });
+  const state={
+    phase: gameEnded? 'ended':'playing',
+    winner: gameEnded ? Object.values(players).find(p=>p.score>=NEED_TO_WIN) : null,
+    players: Object.fromEntries(Object.entries(players).map(([id,p])=>[id,{x:p.x,z:p.z,color:p.color,zoneIdx:p.zoneIdx,score:p.score,name:p.name,holding:p.holding,facing:p.facing||{x:0,z:1}}])),
+    cones: cones.map(c=>({x:c.body.position.x,y:c.body.position.y,z:c.body.position.z,qx:c.body.quaternion.x,qy:c.body.quaternion.y,qz:c.body.quaternion.z,qw:c.body.quaternion.w, held:c.held}))
+  };
+  await storeSet(kState(), state);
+}
+function startHostNetworking(){ /* syncing happens inside hostTick via maybeSyncHost */ }
+
+// ---------- Client networking ----------
+let clientState=null;
+function startClientNetworking(){
+  clientInputTimer=setInterval(()=>{
+    if(phase==='playing') storeSet(kInput(myId), {keys: myKeys, yaw: camYaw});
+  }, 350);
+  clientStateTimer=setInterval(async ()=>{
+    if(phase!=='playing') return;
+    const st=await storeGet(kState());
+    if(st){
+      clientState=st;
+      if(st.phase==='ended'){ clearInterval(clientStateTimer); clearInterval(clientInputTimer); endGame(st.winner.name, st.winner.color); }
+    }
+  }, 350);
+}
+
+function endGame(name, colorIdx){
+  phase='ended';
+  hud.classList.add('hidden'); controlsHint.classList.add('hidden'); hideTouchControls();
+  $('winnerText').textContent='🎉 '+name+' kazandı! ('+COLOR_NAMES[colorIdx]+')';
+  showPanel('gameover');
+}
+
+// ---------- Render / scoreboard ----------
+function renderScoreboard(scores){
+  const sb=$('scoreboard');
+  sb.innerHTML='';
+  Object.values(scores).forEach(p=>{
+    const d=document.createElement('div'); d.className='scorebox';
+    d.textContent=(p.name||'?')+': '+p.score+'/'+NEED_TO_WIN;
+    d.style.borderLeft='4px solid #'+COLORS[p.color].toString(16).padStart(6,'0');
+    sb.appendChild(d);
+  });
+}
+
+function renderFrame(){
+  // update player meshes from authoritative `players`
+  Object.entries(players).forEach(([id,p])=>{
+    const m=ensurePlayerMesh(id, p.color);
+    m.position.set(p.x,0,p.z);
+    if(p.facing){ m.rotation.y=Math.atan2(p.facing.x,p.facing.z); }
+  });
+  cones.forEach(c=>{
+    c.mesh.position.copy(c.body.position);
+    c.mesh.quaternion.copy(c.body.quaternion);
+  });
+  renderScoreboard(players);
+  const cd=$('coneDebug');
+  if(cd) cd.textContent='Koniler: '+cones.map(c=>'('+c.body.position.x.toFixed(1)+','+c.body.position.z.toFixed(1)+')').join(' ');
+  updateCamera(players['host'], 'host');
+}
+
+function renderFrameFromClientState(){
+  if(!clientState) { renderer.render(scene,camera); return; }
+  Object.entries(clientState.players).forEach(([id,p])=>{
+    const m=ensurePlayerMesh(id, p.color);
+    m.position.set(p.x,0,p.z);
+  });
+  // ensure cones array length matches
+  if(cones.length!==clientState.cones.length){
+    cones.forEach(c=>{scene.remove(c.mesh); world.removeBody(c.body);});
+    cones=clientState.cones.map(()=>{
+      const geo=new THREE.ConeGeometry(0.55,1.1,16);
+      const mat=new THREE.MeshStandardMaterial({color:0xff7a1a});
+      const mesh=new THREE.Mesh(geo,mat); mesh.castShadow=true; scene.add(mesh);
+      return {mesh, body:null, held:null};
+    });
+  }
+  clientState.cones.forEach((c,i)=>{
+    cones[i].mesh.position.set(c.x,c.y,c.z);
+    cones[i].mesh.quaternion.set(c.qx,c.qy,c.qz,c.qw);
+  });
+  renderScoreboard(clientState.players);
+  const cd=$('coneDebug');
+  if(cd) cd.textContent='Koniler: '+clientState.cones.map(c=>'('+c.x.toFixed(1)+','+c.z.toFixed(1)+')').join(' ');
+  updateCamera(clientState.players[myId], myId);
+}
+
+// ---------- Main loop ----------
+function loop(){
+  requestAnimationFrame(loop);
+  const dt=Math.min(clock.getDelta(), 0.05);
+  if(phase==='playing'){
+    if(isHost) hostTick(dt);
+    else renderFrameFromClientState();
+  } else {
+    renderer.render(scene,camera);
+  }
+}
+loop();
+} catch(err){
+  const b=document.createElement('div');
+  b.style.cssText='position:fixed;top:0;left:0;right:0;background:#c0392b;color:#fff;padding:14px;z-index:99999;font-size:14px;line-height:1.5;word-break:break-word;';
+  b.textContent='Hata oluştu: '+err.message;
+  document.body.prepend(b);
+  console.error(err);
+}
+</script>
+</body>
+</html>
