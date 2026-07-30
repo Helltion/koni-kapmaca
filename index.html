@@ -108,7 +108,7 @@ if(typeof window.fbdb==='undefined'){
 // ---------- Config ----------
 const ARENA = 20;
 const ZONE_R = 4.2;
-const PICKUP_R = 2.3;
+const PICKUP_R = 2.9;
 const MOVE_SPEED = 7.5;
 const THROW_FORCE = 11;
 const NEED_TO_WIN = 3;
@@ -569,6 +569,7 @@ function hostTick(dt){
   players['host'].keys=myKeys;
   players['host'].yaw=camYaw;
   Object.entries(players).forEach(([id,p])=>{
+    try{
     const k=p.keys||{};
     const yaw=p.yaw||0;
     const dir=computeMoveDir(k, yaw);
@@ -612,6 +613,7 @@ function hostTick(dt){
       p.holding=null;
     }
     p.prevKeys={...k};
+    }catch(e){ console.error('hostTick player skip', id, e); }
   });
 
   // safety clamp: prevent physics explosions/teleports from old cannon.js instability
@@ -757,6 +759,7 @@ function renderFrameFromClientState(){
   const elapsed=performance.now()-clientStateReceivedAt;
   const t=Math.max(0, Math.min(1.4, elapsed/lastSnapshotInterval)); // allow slight overshoot if a packet is late
   Object.entries(clientState.players).forEach(([id,p])=>{
+    try{
     const m=ensurePlayerMesh(id, p.color);
     if(id===myId){
       m.position.set(predX,0,predZ);
@@ -772,6 +775,7 @@ function renderFrameFromClientState(){
       m.position.set(p.x,0,p.z);
     }
     if(p.facing){ m.rotation.y=Math.atan2(p.facing.x,p.facing.z); }
+    }catch(e){ console.error('player render skip', id, e); }
   });
   // ensure cones array length matches
   if(cones.length!==clientState.cones.length){
@@ -792,6 +796,12 @@ function renderFrameFromClientState(){
     }
     cones[i].mesh.quaternion.set(c.qx,c.qy,c.qz,c.qw);
   });
+  // if I'm holding a cone, draw it attached to my locally-predicted position (not the network-lagged one) so it doesn't trail behind my hand
+  const myAuth=clientState.players[myId];
+  if(myAuth && myAuth.holding!=null && cones[myAuth.holding]){
+    const fx=Math.sin(camYaw), fz=Math.cos(camYaw);
+    cones[myAuth.holding].mesh.position.set(predX+fx*1.1, 1.1, predZ+fz*1.1);
+  }
   renderScoreboard(clientState.players);
   const cd=$('coneDebug');
   if(cd) cd.textContent='Koniler: '+clientState.cones.map(c=>'('+c.x.toFixed(1)+','+c.z.toFixed(1)+')').join(' ');
