@@ -527,6 +527,7 @@ function startGameClientView(){
     const sx=ZONES[me.zoneIdx].x, sz=ZONES[me.zoneIdx].z;
     camYaw=Math.atan2(-sx, -sz);
     camPos.set(sx-Math.sin(camYaw)*6, 3.2, sz-Math.cos(camYaw)*6);
+    predX=sx; predZ=sz;
   }
   phase='playing';
 }
@@ -668,6 +669,7 @@ function startHostNetworking(){ /* syncing happens inside hostTick via maybeSync
 let clientState=null;
 let clientPrevState=null;
 let clientStateReceivedAt=0;
+let predX=0, predZ=0;
 const NET_SYNC_MS=180;
 function startClientNetworking(){
   clientInputTimer=setInterval(()=>{
@@ -680,9 +682,22 @@ function startClientNetworking(){
       clientPrevState=clientState;
       clientState=st;
       clientStateReceivedAt=performance.now();
+      // gently correct local prediction toward host's authoritative position (fixes drift, avoids visible snapping)
+      const authMe=st.players[myId];
+      if(authMe){
+        const dx=authMe.x-predX, dz=authMe.z-predZ;
+        const drift=Math.hypot(dx,dz);
+        if(drift>3){ predX=authMe.x; predZ=authMe.z; } // big desync (e.g. just joined): snap
+        else { predX+=dx*0.2; predZ+=dz*0.2; } // small correction, smooth
+      }
       if(st.phase==='ended'){ clearInterval(clientStateTimer); clearInterval(clientInputTimer); endGame(st.winner.name, st.winner.color); }
     }
   }, NET_SYNC_MS);
+}
+function clientPredictStep(dt){
+  const dir=computeMoveDir(myKeys, camYaw);
+  predX=Math.max(-ARENA+0.5,Math.min(ARENA-0.5, predX+dir.x*MOVE_SPEED*dt));
+  predZ=Math.max(-ARENA+0.5,Math.min(ARENA-0.5, predZ+dir.z*MOVE_SPEED*dt));
 }
 
 function endGame(name, colorIdx){
@@ -729,6 +744,13 @@ function renderFrameFromClientState(){
   const t=Math.max(0, Math.min(1.4, elapsed/NET_SYNC_MS)); // allow slight overshoot if a packet is late
   Object.entries(clientState.players).forEach(([id,p])=>{
     const m=ensurePlayerMesh(id, p.color);
+    if(id===myId){
+      m.position.set(predX,0,predZ);
+      const dir=computeMoveDir(myKeys, camYaw);
+      if(dir.x||dir.z){ m.rotation.y=Math.atan2(dir.x,dir.z); }
+      else if(p.facing){ m.rotation.y=Math.atan2(p.facing.x,p.facing.z); }
+      return;
+    }
     const prevP = clientPrevState && clientPrevState.players[id];
     if(prevP){
       m.position.set(lerp(prevP.x,p.x,t), 0, lerp(prevP.z,p.z,t));
@@ -759,7 +781,7 @@ function renderFrameFromClientState(){
   renderScoreboard(clientState.players);
   const cd=$('coneDebug');
   if(cd) cd.textContent='Koniler: '+clientState.cones.map(c=>'('+c.x.toFixed(1)+','+c.z.toFixed(1)+')').join(' ');
-  updateCamera(clientState.players[myId], myId);
+  updateCamera({x:predX, z:predZ}, myId);
 }
 
 // ---------- Main loop ----------
@@ -768,7 +790,7 @@ function loop(){
   const dt=Math.min(clock.getDelta(), 0.05);
   if(phase==='playing'){
     if(isHost) hostTick(dt);
-    else renderFrameFromClientState();
+    else { clientPredictStep(dt); renderFrameFromClientState(); }
   } else {
     renderer.render(scene,camera);
   }
