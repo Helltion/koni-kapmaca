@@ -123,6 +123,7 @@ let isHost=false;
 let roomCode=null;
 let myId='p_'+Math.random().toString(36).slice(2,9);
 let players={};
+const inputListeners={}; // cid -> unsubscribe fn, real-time input from clients (host side)
 let hostLobbyTimer=null, clientLobbyTimer=null, hostSyncTimer=null, clientInputTimer=null, clientStateTimer=null;
 let phase='landing'; // landing, lobby, playing, ended
 
@@ -410,6 +411,16 @@ async function storeListKeys(prefixKey){
     return Object.keys(val).map(cid=>prefixKey+cid);
   }catch(e){ console.error('storage list fail', prefixKey, e); return []; }
 }
+// Real-time listener (pushes updates instantly instead of polling) - much lower latency than storeGet on an interval
+function storeOnValue(key, cb){
+  const path=keyToPath(key);
+  try{
+    const ref=window.fbdb.ref(path);
+    const handler=snap=>{ const v=snap.val(); cb(v===undefined?null:v); };
+    ref.on('value', handler);
+    return ()=>{ try{ ref.off('value', handler); }catch(e){} };
+  }catch(e){ console.error('storage onValue fail', key, e); return ()=>{}; }
+}
 function genRoomCode(){
   const chars='ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; let s='';
   for(let i=0;i<4;i++) s+=chars[Math.floor(Math.random()*chars.length)];
@@ -452,6 +463,11 @@ async function pollJoinRequests(){
           const idx=Object.keys(players).length;
           players[cid]={color:idx, zoneIdx:idx, x:ZONES[idx].x, z:ZONES[idx].z, holding:null, score:0, keys:{}, prevKeys:{}, name:data.name||('Oyuncu '+(idx+1))};
           changed=true;
+          if(!inputListeners[cid]){
+            inputListeners[cid]=storeOnValue(kInput(cid), data=>{
+              if(data && data.keys && players[cid]){ players[cid].keys=data.keys; players[cid].yaw=data.yaw||0; }
+            });
+          }
         }
       }
     }
@@ -652,9 +668,6 @@ function maybeSyncHost(dt){
   }
 }
 async function syncHostNetwork(){
-  const nonHost=Object.keys(players).filter(id=>id!=='host');
-  const results=await Promise.all(nonHost.map(id=>storeGet(kInput(id))));
-  nonHost.forEach((id,i)=>{ if(results[i] && results[i].keys){ players[id].keys=results[i].keys; players[id].yaw=results[i].yaw||0; } });
   const state={
     phase: gameEnded? 'ended':'playing',
     winner: gameEnded ? Object.values(players).find(p=>p.score>=NEED_TO_WIN) : null,
@@ -669,30 +682,31 @@ function startHostNetworking(){ /* syncing happens inside hostTick via maybeSync
 let clientState=null;
 let clientPrevState=null;
 let clientStateReceivedAt=0;
+let lastSnapshotInterval=180; // measured actual gap between snapshots, used for interpolation timing
 let predX=0, predZ=0;
 const NET_SYNC_MS=180;
+let stateUnsub=null;
 function startClientNetworking(){
   clientInputTimer=setInterval(()=>{
     if(phase==='playing') storeSet(kInput(myId), {keys: myKeys, yaw: camYaw});
-  }, NET_SYNC_MS);
-  clientStateTimer=setInterval(async ()=>{
-    if(phase!=='playing') return;
-    const st=await storeGet(kState());
-    if(st){
-      clientPrevState=clientState;
-      clientState=st;
-      clientStateReceivedAt=performance.now();
-      // gently correct local prediction toward host's authoritative position (fixes drift, avoids visible snapping)
-      const authMe=st.players[myId];
-      if(authMe){
-        const dx=authMe.x-predX, dz=authMe.z-predZ;
-        const drift=Math.hypot(dx,dz);
-        if(drift>3){ predX=authMe.x; predZ=authMe.z; } // big desync (e.g. just joined): snap
-        else { predX+=dx*0.2; predZ+=dz*0.2; } // small correction, smooth
-      }
-      if(st.phase==='ended'){ clearInterval(clientStateTimer); clearInterval(clientInputTimer); endGame(st.winner.name, st.winner.color); }
+  }, 100);
+  stateUnsub=storeOnValue(kState(), st=>{
+    if(!st || phase!=='playing') return;
+    const now=performance.now();
+    lastSnapshotInterval=Math.max(60, Math.min(500, now-clientStateReceivedAt));
+    clientPrevState=clientState;
+    clientState=st;
+    clientStateReceivedAt=now;
+    // gently correct local prediction toward host's authoritative position (fixes drift, avoids visible snapping)
+    const authMe=st.players[myId];
+    if(authMe){
+      const dx=authMe.x-predX, dz=authMe.z-predZ;
+      const drift=Math.hypot(dx,dz);
+      if(drift>4){ predX=authMe.x; predZ=authMe.z; } // big desync (e.g. just joined): snap
+      else if(drift>0.35){ predX+=dx*0.06; predZ+=dz*0.06; } // tiny, slow correction only — avoids visible coasting
     }
-  }, NET_SYNC_MS);
+    if(st.phase==='ended'){ if(stateUnsub) stateUnsub(); clearInterval(clientInputTimer); endGame(st.winner.name, st.winner.color); }
+  });
 }
 function clientPredictStep(dt){
   const dir=computeMoveDir(myKeys, camYaw);
@@ -741,7 +755,7 @@ function renderFrameFromClientState(){
   if(!clientState) { renderer.render(scene,camera); return; }
   // interpolation factor: how far we are between the previous and current network snapshot
   const elapsed=performance.now()-clientStateReceivedAt;
-  const t=Math.max(0, Math.min(1.4, elapsed/NET_SYNC_MS)); // allow slight overshoot if a packet is late
+  const t=Math.max(0, Math.min(1.4, elapsed/lastSnapshotInterval)); // allow slight overshoot if a packet is late
   Object.entries(clientState.players).forEach(([id,p])=>{
     const m=ensurePlayerMesh(id, p.color);
     if(id===myId){
