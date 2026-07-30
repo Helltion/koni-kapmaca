@@ -645,7 +645,7 @@ function hostTick(dt){
 let netAccum=0, netBusy=false, gameEnded=false;
 function maybeSyncHost(dt){
   netAccum+=dt*1000;
-  if(netAccum>450 && !netBusy){
+  if(netAccum>180 && !netBusy){
     netAccum=0; netBusy=true;
     syncHostNetwork().finally(()=>netBusy=false);
   }
@@ -666,18 +666,23 @@ function startHostNetworking(){ /* syncing happens inside hostTick via maybeSync
 
 // ---------- Client networking ----------
 let clientState=null;
+let clientPrevState=null;
+let clientStateReceivedAt=0;
+const NET_SYNC_MS=180;
 function startClientNetworking(){
   clientInputTimer=setInterval(()=>{
     if(phase==='playing') storeSet(kInput(myId), {keys: myKeys, yaw: camYaw});
-  }, 350);
+  }, NET_SYNC_MS);
   clientStateTimer=setInterval(async ()=>{
     if(phase!=='playing') return;
     const st=await storeGet(kState());
     if(st){
+      clientPrevState=clientState;
       clientState=st;
+      clientStateReceivedAt=performance.now();
       if(st.phase==='ended'){ clearInterval(clientStateTimer); clearInterval(clientInputTimer); endGame(st.winner.name, st.winner.color); }
     }
-  }, 350);
+  }, NET_SYNC_MS);
 }
 
 function endGame(name, colorIdx){
@@ -716,11 +721,21 @@ function renderFrame(){
   updateCamera(players['host'], 'host');
 }
 
+function lerp(a,b,t){ return a+(b-a)*t; }
 function renderFrameFromClientState(){
   if(!clientState) { renderer.render(scene,camera); return; }
+  // interpolation factor: how far we are between the previous and current network snapshot
+  const elapsed=performance.now()-clientStateReceivedAt;
+  const t=Math.max(0, Math.min(1.4, elapsed/NET_SYNC_MS)); // allow slight overshoot if a packet is late
   Object.entries(clientState.players).forEach(([id,p])=>{
     const m=ensurePlayerMesh(id, p.color);
-    m.position.set(p.x,0,p.z);
+    const prevP = clientPrevState && clientPrevState.players[id];
+    if(prevP){
+      m.position.set(lerp(prevP.x,p.x,t), 0, lerp(prevP.z,p.z,t));
+    } else {
+      m.position.set(p.x,0,p.z);
+    }
+    if(p.facing){ m.rotation.y=Math.atan2(p.facing.x,p.facing.z); }
   });
   // ensure cones array length matches
   if(cones.length!==clientState.cones.length){
@@ -733,7 +748,12 @@ function renderFrameFromClientState(){
     });
   }
   clientState.cones.forEach((c,i)=>{
-    cones[i].mesh.position.set(c.x,c.y,c.z);
+    const prevC = clientPrevState && clientPrevState.cones && clientPrevState.cones[i];
+    if(prevC){
+      cones[i].mesh.position.set(lerp(prevC.x,c.x,t), lerp(prevC.y,c.y,t), lerp(prevC.z,c.z,t));
+    } else {
+      cones[i].mesh.position.set(c.x,c.y,c.z);
+    }
     cones[i].mesh.quaternion.set(c.qx,c.qy,c.qz,c.qw);
   });
   renderScoreboard(clientState.players);
