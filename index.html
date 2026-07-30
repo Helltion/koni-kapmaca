@@ -686,6 +686,9 @@ let clientPrevState=null;
 let clientStateReceivedAt=0;
 let lastSnapshotInterval=180; // measured actual gap between snapshots, used for interpolation timing
 let predX=0, predZ=0;
+let predHolding=null; // locally-predicted held cone index, for instant pickup/drop feedback
+let prevMyInteract=false, prevMyThrow=false;
+let holdMismatchSince=null;
 const NET_SYNC_MS=180;
 let stateUnsub=null;
 function startClientNetworking(){
@@ -706,6 +709,14 @@ function startClientNetworking(){
       const drift=Math.hypot(dx,dz);
       if(drift>4){ predX=authMe.x; predZ=authMe.z; } // big desync (e.g. just joined): snap
       else if(drift>0.35){ predX+=dx*0.06; predZ+=dz*0.06; } // tiny, slow correction only — avoids visible coasting
+      // reconcile predicted pickup/drop with host's authoritative decision (handles pickup races, missed events)
+      const authHold = (authMe.holding!=null) ? authMe.holding : null;
+      if(authHold!==predHolding){
+        if(holdMismatchSince===null) holdMismatchSince=now;
+        else if(now-holdMismatchSince>500){ predHolding=authHold; holdMismatchSince=null; }
+      } else {
+        holdMismatchSince=null;
+      }
     }
     if(st.phase==='ended'){ if(stateUnsub) stateUnsub(); clearInterval(clientInputTimer); endGame(st.winner.name, st.winner.color); }
   });
@@ -714,6 +725,25 @@ function clientPredictStep(dt){
   const dir=computeMoveDir(myKeys, camYaw);
   predX=Math.max(-ARENA+0.5,Math.min(ARENA-0.5, predX+dir.x*MOVE_SPEED*dt));
   predZ=Math.max(-ARENA+0.5,Math.min(ARENA-0.5, predZ+dir.z*MOVE_SPEED*dt));
+  // locally predict pickup/drop so it feels instant, host will confirm/correct shortly after
+  if(myKeys.interact && !prevMyInteract){
+    if(predHolding===null && clientState){
+      let best=-1, bestD=PICKUP_R;
+      clientState.cones.forEach((c,i)=>{
+        if(c.held!==null) return;
+        const d=Math.hypot(c.x-predX, c.z-predZ);
+        if(d<bestD){ bestD=d; best=i; }
+      });
+      if(best>=0) predHolding=best;
+    } else {
+      predHolding=null;
+    }
+  }
+  if(myKeys.throw && !prevMyThrow && predHolding!==null){
+    predHolding=null;
+  }
+  prevMyInteract=myKeys.interact;
+  prevMyThrow=myKeys.throw;
 }
 
 function endGame(name, colorIdx){
@@ -797,10 +827,9 @@ function renderFrameFromClientState(){
     cones[i].mesh.quaternion.set(c.qx,c.qy,c.qz,c.qw);
   });
   // if I'm holding a cone, draw it attached to my locally-predicted position (not the network-lagged one) so it doesn't trail behind my hand
-  const myAuth=clientState.players[myId];
-  if(myAuth && myAuth.holding!=null && cones[myAuth.holding]){
+  if(predHolding!=null && cones[predHolding]){
     const fx=Math.sin(camYaw), fz=Math.cos(camYaw);
-    cones[myAuth.holding].mesh.position.set(predX+fx*1.1, 1.1, predZ+fz*1.1);
+    cones[predHolding].mesh.position.set(predX+fx*1.1, 1.1, predZ+fz*1.1);
   }
   renderScoreboard(clientState.players);
   const cd=$('coneDebug');
