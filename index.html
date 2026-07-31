@@ -834,6 +834,7 @@ function renderFrameFromClientState(){
   if(predHolding!=null && cones[predHolding]){
     const fx=Math.sin(camYaw), fz=Math.cos(camYaw);
     cones[predHolding].mesh.position.set(predX+fx*1.1, 1.1, predZ+fz*1.1);
+    cones[predHolding].mesh.rotation.set(0, camYaw, 0); // keep upright & facing-aligned locally, ignore stale network spin
   }
   renderScoreboard(clientState.players);
   const cd=$('coneDebug');
