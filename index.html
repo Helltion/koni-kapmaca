@@ -709,11 +709,15 @@ function startClientNetworking(){
       const drift=Math.hypot(dx,dz);
       if(drift>4){ predX=authMe.x; predZ=authMe.z; } // big desync (e.g. just joined): snap
       else if(drift>0.35){ predX+=dx*0.06; predZ+=dz*0.06; } // tiny, slow correction only — avoids visible coasting
-      // reconcile predicted pickup/drop with host's authoritative decision (handles pickup races, missed events)
+      // reconcile predicted pickup/drop with host's authoritative decision (handles real pickup conflicts, e.g. two players grabbing the same cone)
       const authHold = (authMe.holding!=null) ? authMe.holding : null;
       if(authHold!==predHolding){
+        // a "real conflict" is when host says a DIFFERENT cone (or someone else) is involved, not just "hasn't caught up yet".
+        // predHolding non-null + authHold null just means the host hasn't confirmed our pickup/drop over the network yet — give it plenty of time.
+        const isRealConflict = authHold!==null && predHolding!==null && authHold!==predHolding;
+        const graceMs = isRealConflict ? 400 : 2000;
         if(holdMismatchSince===null) holdMismatchSince=now;
-        else if(now-holdMismatchSince>500){ predHolding=authHold; holdMismatchSince=null; }
+        else if(now-holdMismatchSince>graceMs){ predHolding=authHold; holdMismatchSince=null; }
       } else {
         holdMismatchSince=null;
       }
