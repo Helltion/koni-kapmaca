@@ -117,7 +117,7 @@ const PICKUP_R = 2.9;
 const MOVE_SPEED = 7.5;
 const THROW_FORCE = 11;
 const NEED_TO_WIN = 3;
-const COLORS = [0x4c9a63, 0x8b5fbf, 0xb5433c, 0x3f6fb0];
+const COLORS = [0x3fb96a, 0x9b5de5, 0xe63946, 0x3a86ff];
 const COLOR_NAMES = ["Yeşil","Mor","Kırmızı","Mavi"];
 const ZONES = [
   {x:0, z:-ARENA*0.62}, {x:ARENA*0.62, z:0}, {x:0, z:ARENA*0.62}, {x:-ARENA*0.62, z:0}
@@ -172,9 +172,43 @@ sun.shadow.mapSize.set(1024,1024);
 sun.shadow.camera.left=-25; sun.shadow.camera.right=25; sun.shadow.camera.top=25; sun.shadow.camera.bottom=-25;
 scene.add(sun);
 
+// procedural light wood-plank floor texture (canvas-based, no external assets needed)
+function makeWoodTexture(){
+  const cw=512, ch=512;
+  const c=document.createElement('canvas'); c.width=cw; c.height=ch;
+  const ctx=c.getContext('2d');
+  ctx.fillStyle='#d9b98a'; ctx.fillRect(0,0,cw,ch);
+  const plankW=cw/6;
+  for(let i=0;i<6;i++){
+    const shade=6+Math.floor(Math.random()*10);
+    ctx.fillStyle=`rgba(0,0,0,0.0${shade})`;
+    ctx.fillRect(i*plankW,0,plankW,ch);
+    // plank seam line
+    ctx.fillStyle='rgba(90,60,30,0.35)';
+    ctx.fillRect(i*plankW,0,2,ch);
+    // subtle grain streaks
+    for(let g=0;g<14;g++){
+      ctx.strokeStyle=`rgba(120,80,40,${0.05+Math.random()*0.08})`;
+      ctx.lineWidth=1+Math.random()*1.5;
+      const gx=i*plankW+Math.random()*plankW;
+      ctx.beginPath(); ctx.moveTo(gx,0);
+      ctx.bezierCurveTo(gx+Math.random()*10-5,ch*0.33,gx+Math.random()*10-5,ch*0.66,gx+Math.random()*6-3,ch);
+      ctx.stroke();
+    }
+  }
+  // horizontal cross-seams for a plank-board look
+  for(let y=0;y<ch;y+=ch/4){
+    ctx.fillStyle='rgba(90,60,30,0.18)';
+    ctx.fillRect(0,y,cw,1.5);
+  }
+  const tex=new THREE.CanvasTexture(c);
+  tex.wrapS=tex.wrapT=THREE.RepeatWrapping;
+  tex.repeat.set(ARENA/2.2, ARENA/2.2);
+  return tex;
+}
 const ground=new THREE.Mesh(
   new THREE.PlaneGeometry(ARENA*2.2, ARENA*2.2),
-  new THREE.MeshStandardMaterial({color:0x1c2430})
+  new THREE.MeshStandardMaterial({map:makeWoodTexture(), roughness:0.85, metalness:0})
 );
 ground.rotation.x=-Math.PI/2; ground.receiveShadow=true; scene.add(ground);
 
@@ -187,7 +221,7 @@ const zoneMeshes=[];
 ZONES.forEach((z,i)=>{
   const m=new THREE.Mesh(
     new THREE.CircleGeometry(ZONE_R, 40),
-    new THREE.MeshStandardMaterial({color:COLORS[i], transparent:true, opacity:0.35, roughness:1, metalness:0, emissive:COLORS[i], emissiveIntensity:0.08})
+    new THREE.MeshStandardMaterial({color:COLORS[i], transparent:true, opacity:0.85, roughness:1, metalness:0})
   );
   m.rotation.x=-Math.PI/2; m.position.set(z.x,0.02,z.z); m.receiveShadow=true;
   scene.add(m); zoneMeshes.push(m);
@@ -255,11 +289,32 @@ const playerMeshes={}; // id -> mesh
 function ensurePlayerMesh(id, colorIdx){
   if(playerMeshes[id]) return playerMeshes[id];
   const g=new THREE.Group();
-  const body=new THREE.Mesh(new THREE.CylinderGeometry(0.5,0.5,1.3,12), new THREE.MeshStandardMaterial({color:COLORS[colorIdx], roughness:1, metalness:0}));
-  body.position.y=0.95; body.castShadow=true;
-  const head=new THREE.Mesh(new THREE.SphereGeometry(0.32,12,12), new THREE.MeshStandardMaterial({color:0xffe0c0}));
-  head.position.y=1.7; head.castShadow=true;
-  g.add(body); g.add(head);
+  const skinMat=new THREE.MeshStandardMaterial({color:0xffe0c0, roughness:0.9, metalness:0});
+  const bodyMat=new THREE.MeshStandardMaterial({color:COLORS[colorIdx], roughness:0.85, metalness:0});
+  const limbMat=new THREE.MeshStandardMaterial({color:COLORS[colorIdx], roughness:0.85, metalness:0});
+
+  // torso (rounded cylinder)
+  const torso=new THREE.Mesh(new THREE.CylinderGeometry(0.32,0.28,0.75,12), bodyMat);
+  torso.position.y=1.05; torso.castShadow=true;
+  g.add(torso);
+
+  // head
+  const head=new THREE.Mesh(new THREE.SphereGeometry(0.28,14,14), skinMat);
+  head.position.y=1.66; head.castShadow=true;
+  g.add(head);
+
+  // arms
+  const armGeo=new THREE.CylinderGeometry(0.09,0.09,0.55,8);
+  const armL=new THREE.Mesh(armGeo, skinMat); armL.position.set(0.42,1.08,0); armL.rotation.z=0.22; armL.castShadow=true;
+  const armR=new THREE.Mesh(armGeo, skinMat); armR.position.set(-0.42,1.08,0); armR.rotation.z=-0.22; armR.castShadow=true;
+  g.add(armL); g.add(armR);
+
+  // legs
+  const legGeo=new THREE.CylinderGeometry(0.11,0.11,0.6,8);
+  const legL=new THREE.Mesh(legGeo, limbMat); legL.position.set(0.15,0.4,0); legL.castShadow=true;
+  const legR=new THREE.Mesh(legGeo, limbMat); legR.position.set(-0.15,0.4,0); legR.castShadow=true;
+  g.add(legL); g.add(legR);
+
   scene.add(g);
   playerMeshes[id]=g;
   return g;
