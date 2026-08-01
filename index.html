@@ -306,16 +306,31 @@ function ensurePlayerMesh(id, colorIdx){
   head.position.y=1.66; head.castShadow=true;
   g.add(head);
 
-  // arms
-  const armGeo=new THREE.CylinderGeometry(0.09,0.09,0.55,8);
-  const armL=new THREE.Mesh(armGeo, skinMat); armL.position.set(0.42,1.08,0); armL.rotation.z=0.22; armL.castShadow=true;
-  const armR=new THREE.Mesh(armGeo, skinMat); armR.position.set(-0.42,1.08,0); armR.rotation.z=-0.22; armR.castShadow=true;
+  // arms (pivot at shoulder so rotation swings from the joint, not the limb's center)
+  const armGeo=new THREE.CylinderGeometry(0.09,0.09,0.5,8);
+  function makeArm(sign){
+    const pivot=new THREE.Group();
+    pivot.position.set(sign*0.38, 1.4, 0);
+    const mesh=new THREE.Mesh(armGeo, skinMat);
+    mesh.position.y=-0.25; mesh.castShadow=true;
+    pivot.add(mesh);
+    pivot.rotation.z=sign*0.22;
+    return pivot;
+  }
+  const armL=makeArm(1), armR=makeArm(-1);
   g.add(armL); g.add(armR);
 
-  // legs
+  // legs (pivot at hip)
   const legGeo=new THREE.CylinderGeometry(0.11,0.11,0.6,8);
-  const legL=new THREE.Mesh(legGeo, limbMat); legL.position.set(0.15,0.4,0); legL.castShadow=true;
-  const legR=new THREE.Mesh(legGeo, limbMat); legR.position.set(-0.15,0.4,0); legR.castShadow=true;
+  function makeLeg(sign){
+    const pivot=new THREE.Group();
+    pivot.position.set(sign*0.15, 0.7, 0);
+    const mesh=new THREE.Mesh(legGeo, limbMat);
+    mesh.position.y=-0.3; mesh.castShadow=true;
+    pivot.add(mesh);
+    return pivot;
+  }
+  const legL=makeLeg(1), legR=makeLeg(-1);
   g.add(legL); g.add(legR);
 
   scene.add(g);
