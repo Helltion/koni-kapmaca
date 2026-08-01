@@ -72,7 +72,7 @@
   <div class="scorebox" id="myColorBox"></div>
   <div class="scorebox" id="coneDebug" style="font-size:10px;"></div>
 </div>
-<div id="controlsHint" class="hidden">WASD: Hareket • Fare: Kamera (tıkla ve sürükle) • E: Al/Bırak • F: Fırlat • Space: Zıpla • C: Kamera Modu</div>
+<div id="controlsHint" class="hidden">WASD: Hareket • Fare: Kamera (tıkla ve sürükle) • E: Al/Bırak • F: Fırlat • Space: Zıpla • Q: Yumruk • R: Ateş • C: Kamera Modu</div>
 
 <div id="lookArea" class="hidden"></div>
 <div id="touchControls" class="hidden">
@@ -82,6 +82,8 @@
     <button class="tbtn" id="btnJump">⬆️</button>
     <button class="tbtn" id="btnInteract">✋</button>
     <button class="tbtn" id="btnThrow">🎯</button>
+    <button class="tbtn" id="btnPunch">👊</button>
+    <button class="tbtn" id="btnShoot">🔫</button>
   </div>
 </div>
 
@@ -119,6 +121,13 @@ const MOVE_SPEED = 7.5;
 const THROW_FORCE = 11;
 const JUMP_VELOCITY = 6.2;
 const GRAVITY = 17;
+const PUNCH_R = 1.6;
+const STUN_TIME = 2;
+const DEAD_TIME = 2;
+const GUN_PICKUP_R = 1.3;
+const GUN_RESPAWN_TIME = 20;
+const BULLET_SPEED = 20;
+const BULLET_HIT_R = 0.7;
 const NEED_TO_WIN = 3;
 const COLORS = [0x3fb96a, 0x9b5de5, 0xe63946, 0x3a86ff];
 const COLOR_NAMES = ["Yeşil","Mor","Kırmızı","Mavi"];
@@ -135,7 +144,7 @@ const inputListeners={}; // cid -> unsubscribe fn, real-time input from clients 
 let hostLobbyTimer=null, clientLobbyTimer=null, hostSyncTimer=null, clientInputTimer=null, clientStateTimer=null;
 let phase='landing'; // landing, lobby, playing, ended
 
-const myKeys={up:false,down:false,left:false,right:false,interact:false,throw:false,jump:false};
+const myKeys={up:false,down:false,left:false,right:false,interact:false,throw:false,jump:false,punch:false,shoot:false};
 let myFacing={x:0,z:1};
 
 // ---------- UI refs ----------
@@ -462,6 +471,40 @@ function resetCones(numPlayers){
   }
 }
 
+// ---------- Gun power-up & bullets ----------
+let gun={active:false, x:0, z:0, heldBy:null, bullets:0};
+let gunSpawnTimer=GUN_RESPAWN_TIME;
+let hostBullets=[]; // host-side simulation: {x,z,vx,vz,ownerId,life}
+let gunMesh=null;
+function ensureGunMesh(){
+  if(gunMesh) return gunMesh;
+  const g=new THREE.Group();
+  const body=new THREE.Mesh(new THREE.BoxGeometry(0.16,0.22,0.55), new THREE.MeshStandardMaterial({color:0x2b2b2f, roughness:0.35, metalness:0.7}));
+  const barrel=new THREE.Mesh(new THREE.CylinderGeometry(0.045,0.045,0.4,10), new THREE.MeshStandardMaterial({color:0x151517, roughness:0.3, metalness:0.8}));
+  barrel.rotation.x=Math.PI/2; barrel.position.set(0,0.03,0.42);
+  const grip=new THREE.Mesh(new THREE.BoxGeometry(0.13,0.32,0.14), new THREE.MeshStandardMaterial({color:0x1c1c1e, roughness:0.6, metalness:0.3}));
+  grip.position.set(0,-0.24,-0.1); grip.rotation.x=0.35;
+  g.add(body); g.add(barrel); g.add(grip);
+  g.castShadow=true;
+  scene.add(g); g.visible=false;
+  gunMesh=g;
+  return g;
+}
+let bulletMeshPool=[];
+function syncBulletMeshes(count){
+  while(bulletMeshPool.length<count){
+    const m=new THREE.Mesh(new THREE.SphereGeometry(0.09,8,8), new THREE.MeshBasicMaterial({color:0xfff3a0}));
+    scene.add(m); bulletMeshPool.push(m);
+  }
+  bulletMeshPool.forEach((m,i)=>{ m.visible=i<count; });
+}
+function spawnGun(){
+  const margin=4;
+  gun.x=(Math.random()*2-1)*(ARENA-margin);
+  gun.z=(Math.random()*2-1)*(ARENA-margin);
+  gun.active=true; gun.heldBy=null; gun.bullets=3;
+}
+
 // ---------- Player meshes ----------
 const playerMeshes={}; // id -> mesh
 function ensurePlayerMesh(id, colorIdx){
@@ -563,9 +606,15 @@ if(isTouch){
   $('btnJump').addEventListener('pointerdown', ()=>{ myKeys.jump=true; });
   $('btnJump').addEventListener('pointerup', ()=>{ myKeys.jump=false; });
   $('btnJump').addEventListener('pointercancel', ()=>{ myKeys.jump=false; });
+  $('btnPunch').addEventListener('pointerdown', ()=>{ myKeys.punch=true; });
+  $('btnPunch').addEventListener('pointerup', ()=>{ myKeys.punch=false; });
+  $('btnPunch').addEventListener('pointercancel', ()=>{ myKeys.punch=false; });
+  $('btnShoot').addEventListener('pointerdown', ()=>{ myKeys.shoot=true; });
+  $('btnShoot').addEventListener('pointerup', ()=>{ myKeys.shoot=false; });
+  $('btnShoot').addEventListener('pointercancel', ()=>{ myKeys.shoot=false; });
   $('btnCam').addEventListener('pointerdown', ()=>{ cycleCamera(); });
 }
-function showTouchControlsIfNeeded(){ if(isTouch){ touchControls.classList.remove('hidden'); $('lookArea').classList.remove('hidden'); controlsHint.textContent='Joystick: Hareket • Sağ taraf sürükle: Kamera • ✋: Al/Bırak • 🎯: Fırlat • ⬆️: Zıpla • 🔄: Kamera Modu'; } }
+function showTouchControlsIfNeeded(){ if(isTouch){ touchControls.classList.remove('hidden'); $('lookArea').classList.remove('hidden'); controlsHint.textContent='Joystick: Hareket • Sağ taraf sürükle: Kamera • ✋: Al/Bırak • 🎯: Fırlat • ⬆️: Zıpla • 👊: Yumruk • 🔫: Ateş • 🔄: Kamera Modu'; } }
 function hideTouchControls(){ touchControls.classList.add('hidden'); $('lookArea').classList.add('hidden'); }
 
 // ---------- Input ----------
@@ -579,6 +628,8 @@ function setKey(code,val){
   if(code==='KeyE') myKeys.interact=val;
   if(code==='KeyF') myKeys.throw=val;
   if(code==='Space') myKeys.jump=val;
+  if(code==='KeyQ') myKeys.punch=val;
+  if(code==='KeyR') myKeys.shoot=val;
   if(code==='KeyC' && val) cycleCamera();
 }
 let cameraMode='third'; // third | first | top
@@ -732,7 +783,7 @@ $('hostBtn').onclick=async ()=>{
   roomCode=genRoomCode();
   const myName=getMyName('Kurucu');
   const c=selectedColorIdx;
-  players={ host:{color:c, zoneIdx:c, x:ZONES[c].x, z:ZONES[c].z, holding:null, score:0, keys:{}, prevKeys:{}, y:0, vy:0, name:myName} };
+  players={ host:{color:c, zoneIdx:c, x:ZONES[c].x, z:ZONES[c].z, holding:null, score:0, keys:{}, prevKeys:{}, y:0, vy:0, stunTimer:0, deadTimer:0, name:myName} };
   $('roomCode').textContent=roomCode;
   $('roomCodeBox').classList.remove('hidden');
   $('startBtn').classList.remove('hidden');
@@ -758,7 +809,7 @@ async function pollJoinRequests(){
           let color=(data.color!=null && !usedColors.has(data.color)) ? data.color : [0,1,2,3].find(c=>!usedColors.has(c));
           if(color===undefined) continue; // no free slot (shouldn't happen, capped at 4)
           usedColors.add(color);
-          players[cid]={color, zoneIdx:color, x:ZONES[color].x, z:ZONES[color].z, holding:null, score:0, keys:{}, prevKeys:{}, y:0, vy:0, name:data.name||('Oyuncu '+(Object.keys(players).length+1))};
+          players[cid]={color, zoneIdx:color, x:ZONES[color].x, z:ZONES[color].z, holding:null, score:0, keys:{}, prevKeys:{}, y:0, vy:0, stunTimer:0, deadTimer:0, name:data.name||('Oyuncu '+(Object.keys(players).length+1))};
           changed=true;
           if(!inputListeners[cid]){
             inputListeners[cid]=storeOnValue(kInput(cid), data=>{
@@ -823,7 +874,7 @@ $('startBtn').onclick=async ()=>{
 // ---------- Game start ----------
 let myColorIdx=0, myZoneIdx=0;
 function startGame(){
-  lastScoreSnapshot={};
+  lastScoreSnapshot={}; lastStunSnapshot={}; lastDeadSnapshot={}; lastGunBullets=null;
   confettiParticles.forEach(p=>{ scene.remove(p.mesh); p.mesh.geometry.dispose(); p.mesh.material.dispose(); });
   confettiParticles=[];
   resetCones(Object.keys(players).length);
@@ -869,15 +920,38 @@ function hostTick(dt){
   // update own keys/yaw
   players['host'].keys=myKeys;
   players['host'].yaw=camYaw;
+
+  // gun respawn timer (global, not per-player)
+  if(!gun.active){
+    gunSpawnTimer-=dt;
+    if(gunSpawnTimer<=0){ spawnGun(); }
+  }
+
   Object.entries(players).forEach(([id,p])=>{
     try{
     const k=p.keys||{};
+    p.prevKeys=p.prevKeys||{};
+    p.stunTimer=p.stunTimer||0; p.deadTimer=p.deadTimer||0;
+
+    // dead (shot): frozen & hidden until respawn timer elapses
+    if(p.deadTimer>0){
+      p.deadTimer=Math.max(0, p.deadTimer-dt);
+      if(p.deadTimer<=0){ p.x=ZONES[p.zoneIdx].x; p.z=ZONES[p.zoneIdx].z; p.y=0; p.vy=0; }
+      p.prevKeys={...k};
+      return;
+    }
+    // stunned (punched): frozen in place until it wears off
+    if(p.stunTimer>0){
+      p.stunTimer=Math.max(0, p.stunTimer-dt);
+      p.prevKeys={...k};
+      return;
+    }
+
     const yaw=p.yaw||0;
     const dir=computeMoveDir(k, yaw);
     p.x=Math.max(-ARENA+0.5,Math.min(ARENA-0.5, p.x+dir.x*MOVE_SPEED*dt));
     p.z=Math.max(-ARENA+0.5,Math.min(ARENA-0.5, p.z+dir.z*MOVE_SPEED*dt));
     p.facing={x:Math.sin(yaw), z:Math.cos(yaw)};
-    p.prevKeys=p.prevKeys||{};
     // jump physics
     p.y=p.y||0; p.vy=p.vy||0;
     if(k.jump && !p.prevKeys.jump && p.y<=0.001){ p.vy=JUMP_VELOCITY; if(id==='host') playJumpSound(); }
@@ -919,9 +993,55 @@ function hostTick(dt){
       c.body.velocity.set(f.x*THROW_FORCE, 4, f.z*THROW_FORCE);
       p.holding=null;
     }
+    // punch edge — stuns the nearest other player within range
+    if(k.punch && !p.prevKeys.punch){
+      let hit=null, bestD=PUNCH_R;
+      Object.entries(players).forEach(([oid,op])=>{
+        if(oid===id || op.deadTimer>0) return;
+        const d=Math.hypot(op.x-p.x, op.z-p.z);
+        if(d<bestD){ bestD=d; hit=op; }
+      });
+      if(hit){ hit.stunTimer=STUN_TIME; }
+    }
+    // gun pickup (walk over it)
+    if(gun.active && gun.heldBy===null){
+      const d=Math.hypot(gun.x-p.x, gun.z-p.z);
+      if(d<GUN_PICKUP_R){ gun.heldBy=id; }
+    }
+    // shoot edge
+    if(k.shoot && !p.prevKeys.shoot && gun.heldBy===id && gun.bullets>0){
+      gun.bullets--;
+      const f=p.facing||{x:0,z:1};
+      hostBullets.push({x:p.x+f.x*1.0, z:p.z+f.z*1.0, vx:f.x*BULLET_SPEED, vz:f.z*BULLET_SPEED, ownerId:id, life:2.2});
+      if(gun.bullets<=0){ gun.active=false; gun.heldBy=null; gunSpawnTimer=GUN_RESPAWN_TIME; }
+    }
     p.prevKeys={...k};
     }catch(e){ console.error('hostTick player skip', id, e); }
   });
+
+  // bullet simulation + hit detection
+  for(let i=hostBullets.length-1;i>=0;i--){
+    const b=hostBullets[i];
+    b.x+=b.vx*dt; b.z+=b.vz*dt; b.life-=dt;
+    let gone = b.life<=0 || Math.abs(b.x)>ARENA+1 || Math.abs(b.z)>ARENA+1;
+    if(!gone){
+      for(const [oid,op] of Object.entries(players)){
+        if(oid===b.ownerId || op.deadTimer>0) continue;
+        const d=Math.hypot(op.x-b.x, op.z-b.z);
+        if(d<BULLET_HIT_R){
+          op.deadTimer=DEAD_TIME; op.stunTimer=0;
+          if(op.holding!==null){
+            const c=cones[op.holding];
+            c.held=null; c.body.type=CANNON.Body.DYNAMIC; c.body.collisionResponse=true; c.body.wakeUp();
+            op.holding=null;
+          }
+          if(gun.heldBy===oid){ gun.heldBy=null; gun.active=true; gun.x=op.x; gun.z=op.z; }
+          gone=true; break;
+        }
+      }
+    }
+    if(gone) hostBullets.splice(i,1);
+  }
 
   // safety clamp: prevent physics explosions/teleports from old cannon.js instability
   cones.forEach(c=>{
@@ -980,8 +1100,10 @@ async function syncHostNetwork(){
   const state={
     phase: gameEnded? 'ended':'playing',
     winner: gameEnded ? Object.values(players).find(p=>p.score>=NEED_TO_WIN) : null,
-    players: Object.fromEntries(Object.entries(players).map(([id,p])=>[id,{x:p.x,z:p.z,y:p.y||0,color:p.color,zoneIdx:p.zoneIdx,score:p.score,name:p.name,holding:p.holding,facing:p.facing||{x:0,z:1}}])),
-    cones: cones.map(c=>({x:c.body.position.x,y:c.body.position.y,z:c.body.position.z,qx:c.body.quaternion.x,qy:c.body.quaternion.y,qz:c.body.quaternion.z,qw:c.body.quaternion.w, held:c.held}))
+    players: Object.fromEntries(Object.entries(players).map(([id,p])=>[id,{x:p.x,z:p.z,y:p.y||0,color:p.color,zoneIdx:p.zoneIdx,score:p.score,name:p.name,holding:p.holding,facing:p.facing||{x:0,z:1},stunTimer:p.stunTimer||0,deadTimer:p.deadTimer||0}])),
+    cones: cones.map(c=>({x:c.body.position.x,y:c.body.position.y,z:c.body.position.z,qx:c.body.quaternion.x,qy:c.body.quaternion.y,qz:c.body.quaternion.z,qw:c.body.quaternion.w, held:c.held})),
+    gun: {active:gun.active, x:gun.x, z:gun.z, heldBy:gun.heldBy, bullets:gun.bullets},
+    bullets: hostBullets.map(b=>({x:b.x, z:b.z, ownerId:b.ownerId}))
   };
   await storeSet(kState(), state);
 }
@@ -1001,7 +1123,7 @@ const NET_SYNC_MS=180;
 let stateUnsub=null;
 function startClientNetworking(){
   clientState=null; clientPrevState=null; predHolding=null; holdMismatchSince=null;
-  predY=0; predVY=0; prevMyJump=false; lastScoreSnapshot={};
+  predY=0; predVY=0; prevMyJump=false; lastScoreSnapshot={}; lastStunSnapshot={}; lastDeadSnapshot={}; lastGunBullets=null;
   prevMyInteract=false; prevMyThrow=false;
   clientInputTimer=setInterval(()=>{
     if(phase==='playing') storeSet(kInput(myId), {keys: myKeys, yaw: camYaw});
@@ -1037,6 +1159,11 @@ function startClientNetworking(){
   });
 }
 function clientPredictStep(dt){
+  const myAuth=clientState && clientState.players[myId];
+  if(myAuth && ((myAuth.stunTimer||0)>0 || (myAuth.deadTimer||0)>0)){
+    prevMyInteract=myKeys.interact; prevMyThrow=myKeys.throw; prevMyJump=myKeys.jump;
+    return; // frozen server-side (stunned/dead) — don't predict local movement while this is true
+  }
   const dir=computeMoveDir(myKeys, camYaw);
   predX=Math.max(-ARENA+0.5,Math.min(ARENA-0.5, predX+dir.x*MOVE_SPEED*dt));
   predZ=Math.max(-ARENA+0.5,Math.min(ARENA-0.5, predZ+dir.z*MOVE_SPEED*dt));
@@ -1101,9 +1228,13 @@ $('playAgainBtn').onclick=async ()=>{
   if(!isHost) return;
   gameEnded=false;
   Object.values(players).forEach(p=>{
-    p.score=0; p.holding=null; p.keys={}; p.prevKeys={}; p.y=0; p.vy=0;
+    p.score=0; p.holding=null; p.keys={}; p.prevKeys={}; p.y=0; p.vy=0; p.stunTimer=0; p.deadTimer=0;
     p.x=ZONES[p.zoneIdx].x; p.z=ZONES[p.zoneIdx].z;
   });
+  gun={active:false, x:0, z:0, heldBy:null, bullets:0};
+  gunSpawnTimer=GUN_RESPAWN_TIME;
+  hostBullets=[];
+  if(gunMesh) gunMesh.visible=false;
   resetCones(Object.keys(players).length);
   await storeSet(kLobby(), {players: publicPlayers(), started:false});
   showPanel('lobby'); $('waitHint').classList.add('hidden'); $('startBtn').classList.remove('hidden'); renderLobby(); phase='lobby';
@@ -1123,6 +1254,33 @@ function renderScoreboard(scores){
   });
 }
 
+function renderGunAndBullets(gunData, bulletsData, playersObj){
+  const gm=ensureGunMesh();
+  if(gunData && gunData.active){
+    gm.visible=true;
+    if(gunData.heldBy && playersObj[gunData.heldBy]){
+      const hp=playersObj[gunData.heldBy];
+      const f=hp.facing||{x:0,z:1};
+      gm.position.set(hp.x+f.x*0.5, 1.05+(hp.y||0), hp.z+f.z*0.5);
+      gm.rotation.y=Math.atan2(f.x,f.z);
+    } else {
+      gm.position.set(gunData.x, 0.45, gunData.z);
+      gm.rotation.y=performance.now()/1000;
+    }
+  } else {
+    gm.visible=false;
+  }
+  syncBulletMeshes(bulletsData.length);
+  bulletsData.forEach((b,i)=>{ bulletMeshPool[i].position.set(b.x, 1.05, b.z); });
+}
+function applyCombatVisual(m, p){
+  const torso=m.children[0];
+  if((p.deadTimer||0)>0){ m.visible=false; return; }
+  m.visible=true;
+  if((p.stunTimer||0)>0){ torso.material.color.setHex(0x8a8a8a); m.rotation.z=Math.sin(performance.now()/90)*0.12; }
+  else { torso.material.color.setHex(COLORS[p.color]); m.rotation.z=0; }
+}
+
 function renderFrame(){
   // update player meshes from authoritative `players`
   Object.entries(players).forEach(([id,p])=>{
@@ -1132,12 +1290,15 @@ function renderFrame(){
     const k=p.keys||{};
     const moving=!!(k.up||k.down||k.left||k.right);
     animateLimbs(m, moving, (p.y||0)>0.02);
+    applyCombatVisual(m, p);
   });
   cones.forEach(c=>{
     c.mesh.position.copy(c.body.position);
     c.mesh.quaternion.copy(c.body.quaternion);
   });
+  renderGunAndBullets(gun, hostBullets, players);
   checkScoreSound(players);
+  checkCombatSounds(players, gun);
   renderScoreboard(players);
   const cd=$('coneDebug');
   if(cd) cd.textContent='Koniler: '+cones.map(c=>'('+c.body.position.x.toFixed(1)+','+c.body.position.z.toFixed(1)+')').join(' ');
@@ -1193,6 +1354,48 @@ function checkScoreSound(playersObj){
   });
   if(increased) playScoreSound();
 }
+function playPunchSound(){
+  const ctx=getAudioCtx(); if(!ctx) return;
+  const t0=ctx.currentTime;
+  const osc=ctx.createOscillator(); const gain=ctx.createGain();
+  osc.type='square';
+  osc.frequency.setValueAtTime(160,t0);
+  osc.frequency.exponentialRampToValueAtTime(60,t0+0.13);
+  gain.gain.setValueAtTime(0.3,t0);
+  gain.gain.exponentialRampToValueAtTime(0.001,t0+0.16);
+  osc.connect(gain); gain.connect(ctx.destination);
+  osc.start(t0); osc.stop(t0+0.18);
+}
+function playShootSound(){
+  const ctx=getAudioCtx(); if(!ctx) return;
+  const t0=ctx.currentTime;
+  const osc=ctx.createOscillator(); const gain=ctx.createGain();
+  osc.type='sawtooth';
+  osc.frequency.setValueAtTime(900,t0);
+  osc.frequency.exponentialRampToValueAtTime(140,t0+0.09);
+  gain.gain.setValueAtTime(0.25,t0);
+  gain.gain.exponentialRampToValueAtTime(0.001,t0+0.1);
+  osc.connect(gain); gain.connect(ctx.destination);
+  osc.start(t0); osc.stop(t0+0.12);
+}
+function playDeathSound(){
+  [440,330,220,140].forEach((f,i)=> playTone(f,0.22,'sawtooth',0.16,i*0.07));
+}
+let lastStunSnapshot={}, lastDeadSnapshot={}, lastGunBullets=null;
+function checkCombatSounds(playersObj, gunData){
+  Object.entries(playersObj).forEach(([id,p])=>{
+    const prevStun=lastStunSnapshot[id]||0;
+    if((p.stunTimer||0)>0 && prevStun<=0) playPunchSound();
+    lastStunSnapshot[id]=p.stunTimer||0;
+    const prevDead=lastDeadSnapshot[id]||0;
+    if((p.deadTimer||0)>0 && prevDead<=0) playDeathSound();
+    lastDeadSnapshot[id]=p.deadTimer||0;
+  });
+  if(gunData){
+    if(lastGunBullets!==null && gunData.bullets<lastGunBullets) playShootSound();
+    lastGunBullets=gunData.bullets;
+  }
+}
 
 // ---------- Confetti (winner celebration) ----------
 let confettiParticles=[];
@@ -1246,6 +1449,7 @@ function renderFrameFromClientState(){
       if(dir.x||dir.z){ m.rotation.y=Math.atan2(dir.x,dir.z); }
       else if(p.facing){ m.rotation.y=Math.atan2(p.facing.x,p.facing.z); }
       animateLimbs(m, !!(dir.x||dir.z), predY>0.02);
+      applyCombatVisual(m, p);
       return;
     }
     const prevP = clientPrevState && clientPrevState.players[id];
@@ -1258,6 +1462,7 @@ function renderFrameFromClientState(){
     }
     if(p.facing){ m.rotation.y=Math.atan2(p.facing.x,p.facing.z); }
     animateLimbs(m, moved, (p.y||0)>0.02);
+    applyCombatVisual(m, p);
     }catch(e){ console.error('player render skip', id, e); }
   });
   // ensure cones array length matches
@@ -1283,7 +1488,16 @@ function renderFrameFromClientState(){
     cones[predHolding].mesh.position.set(predX+fx*1.1, 1.1+predY, predZ+fz*1.1);
     cones[predHolding].mesh.rotation.set(0, camYaw, 0); // keep upright & facing-aligned locally, ignore stale network spin
   }
+  if(clientState.gun){
+    renderGunAndBullets(clientState.gun, clientState.bullets||[], clientState.players);
+    if(clientState.gun.heldBy===myId){
+      const fx=Math.sin(camYaw), fz=Math.cos(camYaw);
+      gunMesh.position.set(predX+fx*0.5, 1.05+predY, predZ+fz*0.5);
+      gunMesh.rotation.y=camYaw;
+    }
+  }
   checkScoreSound(clientState.players);
+  checkCombatSounds(clientState.players, clientState.gun);
   renderScoreboard(clientState.players);
   const cd=$('coneDebug');
   if(cd) cd.textContent='Koniler: '+clientState.cones.map(c=>'('+c.x.toFixed(1)+','+c.z.toFixed(1)+')').join(' ');
