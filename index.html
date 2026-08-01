@@ -154,13 +154,16 @@ function showPanel(name){
 
 // ---------- Three.js setup ----------
 const scene=new THREE.Scene();
-scene.background=new THREE.Color(0x0d1117);
 const camera=new THREE.PerspectiveCamera(45, innerWidth/innerHeight, 0.1, 200);
 camera.position.set(0, ARENA*1.35, ARENA*1.15);
 camera.lookAt(0,0,0);
 const renderer=new THREE.WebGLRenderer({antialias:true});
 renderer.setSize(innerWidth, innerHeight);
 renderer.shadowMap.enabled=true;
+renderer.shadowMap.type=THREE.PCFSoftShadowMap;
+if(THREE.sRGBEncoding) renderer.outputEncoding=THREE.sRGBEncoding;
+if(THREE.ACESFilmicToneMapping) renderer.toneMapping=THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure=1.05;
 document.body.appendChild(renderer.domElement);
 
 addEventListener('resize',()=>{
@@ -168,12 +171,36 @@ addEventListener('resize',()=>{
   renderer.setSize(innerWidth, innerHeight);
 });
 
-const hemi=new THREE.HemisphereLight(0xffffff,0x223344,0.9); scene.add(hemi);
-const sun=new THREE.DirectionalLight(0xffffff,1.0);
-sun.position.set(10,20,10); sun.castShadow=true;
-sun.shadow.mapSize.set(1024,1024);
+// procedural sky dome (gradient horizon, no external image needed)
+function makeSkyTexture(){
+  const cw=4, ch=512;
+  const c=document.createElement('canvas'); c.width=cw; c.height=ch;
+  const ctx=c.getContext('2d');
+  const grad=ctx.createLinearGradient(0,0,0,ch);
+  grad.addColorStop(0,'#3f7fd1');
+  grad.addColorStop(0.45,'#7ab6e6');
+  grad.addColorStop(0.78,'#dcefF7');
+  grad.addColorStop(1,'#f3e6c9');
+  ctx.fillStyle=grad; ctx.fillRect(0,0,cw,ch);
+  const tex=new THREE.CanvasTexture(c);
+  return tex;
+}
+const skyDome=new THREE.Mesh(
+  new THREE.SphereGeometry(150,24,16),
+  new THREE.MeshBasicMaterial({map:makeSkyTexture(), side:THREE.BackSide, fog:false})
+);
+scene.add(skyDome);
+scene.fog=new THREE.Fog(0xdcefF7, 45, 145);
+
+const hemi=new THREE.HemisphereLight(0xffffff,0x445566,1.0); scene.add(hemi);
+const sun=new THREE.DirectionalLight(0xfff2d9,1.15);
+sun.position.set(14,24,12); sun.castShadow=true;
+sun.shadow.mapSize.set(2048,2048);
 sun.shadow.camera.left=-25; sun.shadow.camera.right=25; sun.shadow.camera.top=25; sun.shadow.camera.bottom=-25;
+sun.shadow.bias=-0.0015;
 scene.add(sun);
+const fill=new THREE.DirectionalLight(0xbcd4ff,0.28);
+fill.position.set(-12,10,-14); scene.add(fill);
 
 // procedural light wood-plank floor texture (canvas-based, no external assets needed)
 function makeWoodTexture(){
@@ -723,6 +750,8 @@ $('startBtn').onclick=async ()=>{
 let myColorIdx=0, myZoneIdx=0;
 function startGame(){
   lastScoreSnapshot={};
+  confettiParticles.forEach(p=>{ scene.remove(p.mesh); p.mesh.geometry.dispose(); p.mesh.material.dispose(); });
+  confettiParticles=[];
   resetCones(Object.keys(players).length);
   showPanel('playing'); hud.classList.remove('hidden'); controlsHint.classList.remove('hidden');
   showTouchControlsIfNeeded();
@@ -970,6 +999,7 @@ function endGame(name, colorIdx){
   $('winnerText').textContent='🎉 '+name+' kazandı! ('+COLOR_NAMES[colorIdx]+')';
   showPanel('gameover');
   playWinSound();
+  spawnConfetti(ZONES[colorIdx].x, ZONES[colorIdx].z);
   if(isHost){
     $('playAgainBtn').classList.remove('hidden');
     $('gameoverWaitHint').classList.add('hidden');
@@ -1090,6 +1120,43 @@ function checkScoreSound(playersObj){
   if(increased) playScoreSound();
 }
 
+// ---------- Confetti (winner celebration) ----------
+let confettiParticles=[];
+const CONFETTI_COLORS=[0xffffff,0xffd23f,0xff595e,0x1982c4,0x8ac926,0x6a4c93,0xffa62b];
+function spawnConfetti(originX, originZ){
+  for(let i=0;i<90;i++){
+    const mat=new THREE.MeshBasicMaterial({color:CONFETTI_COLORS[Math.floor(Math.random()*CONFETTI_COLORS.length)], side:THREE.DoubleSide});
+    const mesh=new THREE.Mesh(new THREE.PlaneGeometry(0.18,0.26), mat);
+    mesh.position.set(originX+(Math.random()-0.5)*3, 6+Math.random()*4, originZ+(Math.random()-0.5)*3);
+    mesh.rotation.set(Math.random()*Math.PI, Math.random()*Math.PI, Math.random()*Math.PI);
+    scene.add(mesh);
+    confettiParticles.push({
+      mesh,
+      vy:-(1.8+Math.random()*1.8),
+      vx:(Math.random()-0.5)*2.4,
+      vz:(Math.random()-0.5)*2.4,
+      spin:(Math.random()-0.5)*7,
+      age:0, life:3+Math.random()*1.5
+    });
+  }
+}
+function updateConfetti(dt){
+  if(confettiParticles.length===0) return;
+  for(let i=confettiParticles.length-1;i>=0;i--){
+    const p=confettiParticles[i];
+    p.age+=dt;
+    p.mesh.position.y+=p.vy*dt;
+    p.mesh.position.x+=p.vx*dt;
+    p.mesh.position.z+=p.vz*dt;
+    p.mesh.rotation.z+=p.spin*dt;
+    p.mesh.rotation.x+=p.spin*0.6*dt;
+    if(p.age>p.life || p.mesh.position.y<-2){
+      scene.remove(p.mesh); p.mesh.geometry.dispose(); p.mesh.material.dispose();
+      confettiParticles.splice(i,1);
+    }
+  }
+}
+
 function lerp(a,b,t){ return a+(b-a)*t; }
 function renderFrameFromClientState(){
   if(!clientState) { renderer.render(scene,camera); return; }
@@ -1153,6 +1220,7 @@ function renderFrameFromClientState(){
 function loop(){
   requestAnimationFrame(loop);
   const dt=Math.min(clock.getDelta(), 0.05);
+  updateConfetti(dt);
   if(phase==='playing'){
     if(isHost) hostTick(dt);
     else { clientPredictStep(dt); renderFrameFromClientState(); }
