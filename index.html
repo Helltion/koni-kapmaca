@@ -626,6 +626,7 @@ function getMyName(fallback){
 
 // ---------- Networking setup ----------
 $('hostBtn').onclick=async ()=>{
+  getAudioCtx();
   isHost=true; myId='host';
   roomCode=genRoomCode();
   const myName=getMyName('Kurucu');
@@ -672,6 +673,7 @@ async function pollJoinRequests(){
 }
 
 $('joinBtn').onclick=async ()=>{
+  getAudioCtx();
   const code=$('joinCode').value.trim().toUpperCase();
   if(!code) return;
   isHost=false; roomCode=code;
@@ -720,6 +722,7 @@ $('startBtn').onclick=async ()=>{
 // ---------- Game start ----------
 let myColorIdx=0, myZoneIdx=0;
 function startGame(){
+  lastScoreSnapshot={};
   resetCones(Object.keys(players).length);
   showPanel('playing'); hud.classList.remove('hidden'); controlsHint.classList.remove('hidden');
   showTouchControlsIfNeeded();
@@ -774,7 +777,7 @@ function hostTick(dt){
     p.prevKeys=p.prevKeys||{};
     // jump physics
     p.y=p.y||0; p.vy=p.vy||0;
-    if(k.jump && !p.prevKeys.jump && p.y<=0.001){ p.vy=JUMP_VELOCITY; }
+    if(k.jump && !p.prevKeys.jump && p.y<=0.001){ p.vy=JUMP_VELOCITY; if(id==='host') playJumpSound(); }
     p.vy-=GRAVITY*dt;
     p.y=Math.max(0, p.y+p.vy*dt);
     if(p.y<=0){ p.y=0; p.vy=0; }
@@ -895,7 +898,7 @@ const NET_SYNC_MS=180;
 let stateUnsub=null;
 function startClientNetworking(){
   clientState=null; clientPrevState=null; predHolding=null; holdMismatchSince=null;
-  predY=0; predVY=0; prevMyJump=false;
+  predY=0; predVY=0; prevMyJump=false; lastScoreSnapshot={};
   prevMyInteract=false; prevMyThrow=false;
   clientInputTimer=setInterval(()=>{
     if(phase==='playing') storeSet(kInput(myId), {keys: myKeys, yaw: camYaw});
@@ -935,7 +938,7 @@ function clientPredictStep(dt){
   predX=Math.max(-ARENA+0.5,Math.min(ARENA-0.5, predX+dir.x*MOVE_SPEED*dt));
   predZ=Math.max(-ARENA+0.5,Math.min(ARENA-0.5, predZ+dir.z*MOVE_SPEED*dt));
   // local jump prediction (mirrors host's physics so it feels instant)
-  if(myKeys.jump && !prevMyJump && predY<=0.001){ predVY=JUMP_VELOCITY; }
+  if(myKeys.jump && !prevMyJump && predY<=0.001){ predVY=JUMP_VELOCITY; playJumpSound(); }
   predVY-=GRAVITY*dt;
   predY=Math.max(0, predY+predVY*dt);
   if(predY<=0){ predY=0; predVY=0; }
@@ -966,6 +969,7 @@ function endGame(name, colorIdx){
   hud.classList.add('hidden'); controlsHint.classList.add('hidden'); hideTouchControls();
   $('winnerText').textContent='🎉 '+name+' kazandı! ('+COLOR_NAMES[colorIdx]+')';
   showPanel('gameover');
+  playWinSound();
   if(isHost){
     $('playAgainBtn').classList.remove('hidden');
     $('gameoverWaitHint').classList.add('hidden');
@@ -1029,10 +1033,61 @@ function renderFrame(){
     c.mesh.position.copy(c.body.position);
     c.mesh.quaternion.copy(c.body.quaternion);
   });
+  checkScoreSound(players);
   renderScoreboard(players);
   const cd=$('coneDebug');
   if(cd) cd.textContent='Koniler: '+cones.map(c=>'('+c.body.position.x.toFixed(1)+','+c.body.position.z.toFixed(1)+')').join(' ');
   updateCamera(players['host'], 'host');
+}
+
+// ---------- Sound effects (procedural, no external audio files) ----------
+let audioCtx=null;
+function getAudioCtx(){
+  try{
+    if(!audioCtx){ audioCtx=new (window.AudioContext||window.webkitAudioContext)(); }
+    if(audioCtx.state==='suspended') audioCtx.resume();
+  }catch(e){ console.error('audio init fail', e); }
+  return audioCtx;
+}
+function playTone(freq, dur, type, gainPeak, startDelay){
+  const ctx=getAudioCtx(); if(!ctx) return;
+  const t0=ctx.currentTime+(startDelay||0);
+  const osc=ctx.createOscillator(); const gain=ctx.createGain();
+  osc.type=type||'sine'; osc.frequency.setValueAtTime(freq, t0);
+  gain.gain.setValueAtTime(0, t0);
+  gain.gain.linearRampToValueAtTime(gainPeak||0.2, t0+0.01);
+  gain.gain.exponentialRampToValueAtTime(0.001, t0+dur);
+  osc.connect(gain); gain.connect(ctx.destination);
+  osc.start(t0); osc.stop(t0+dur+0.02);
+}
+function playJumpSound(){
+  const ctx=getAudioCtx(); if(!ctx) return;
+  const t0=ctx.currentTime;
+  const osc=ctx.createOscillator(); const gain=ctx.createGain();
+  osc.type='sine';
+  osc.frequency.setValueAtTime(300,t0);
+  osc.frequency.exponentialRampToValueAtTime(650,t0+0.12);
+  gain.gain.setValueAtTime(0.22,t0);
+  gain.gain.exponentialRampToValueAtTime(0.001,t0+0.15);
+  osc.connect(gain); gain.connect(ctx.destination);
+  osc.start(t0); osc.stop(t0+0.16);
+}
+function playScoreSound(){
+  playTone(880,0.5,'sine',0.22,0);
+  playTone(1320,0.5,'sine',0.12,0.02);
+}
+function playWinSound(){
+  [523,659,784,1047].forEach((f,i)=> playTone(f,0.22,'square',0.18,i*0.11));
+}
+let lastScoreSnapshot={};
+function checkScoreSound(playersObj){
+  let increased=false;
+  Object.entries(playersObj).forEach(([id,p])=>{
+    const prev=lastScoreSnapshot[id]||0;
+    if(p.score>prev) increased=true;
+    lastScoreSnapshot[id]=p.score;
+  });
+  if(increased) playScoreSound();
 }
 
 function lerp(a,b,t){ return a+(b-a)*t; }
@@ -1087,6 +1142,7 @@ function renderFrameFromClientState(){
     cones[predHolding].mesh.position.set(predX+fx*1.1, 1.1+predY, predZ+fz*1.1);
     cones[predHolding].mesh.rotation.set(0, camYaw, 0); // keep upright & facing-aligned locally, ignore stale network spin
   }
+  checkScoreSound(clientState.players);
   renderScoreboard(clientState.players);
   const cd=$('coneDebug');
   if(cd) cd.textContent='Koniler: '+clientState.cones.map(c=>'('+c.x.toFixed(1)+','+c.z.toFixed(1)+')').join(' ');
