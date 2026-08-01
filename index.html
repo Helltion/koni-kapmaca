@@ -584,7 +584,7 @@ $('restartBtn').onclick=()=>location.reload();
 const clock=new THREE.Clock();
 function computeMoveDir(k, yaw){
   const fx=Math.sin(yaw), fz=Math.cos(yaw);
-  const rx=Math.cos(yaw), rz=-Math.sin(yaw);
+  const rx=-Math.cos(yaw), rz=Math.sin(yaw);
   let mx=0,mz=0;
   if(k.up){ mx+=fx; mz+=fz; }
   if(k.down){ mx-=fx; mz-=fz; }
