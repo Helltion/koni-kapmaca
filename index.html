@@ -37,6 +37,9 @@
   <div class="panel" id="landing">
     <h1>🚩 Koni Kapmaca</h1>
     <div class="hint">Arkadaşlarınla uzaktan oyna. Biri oda kurar, diğerleri koda katılır.</div>
+    <input id="nameInput" placeholder="Adın (opsiyonel)" maxlength="12" autocomplete="off">
+    <div class="hint" style="margin-bottom:6px;">Renk seç:</div>
+    <div id="colorPicker" style="display:flex;gap:10px;justify-content:center;margin-bottom:14px;"></div>
     <button id="hostBtn">Oda Kur</button>
     <div id="joinArea" style="margin-top:14px;">
       <input id="joinCode" placeholder="Oda kodunu gir" autocomplete="off">
@@ -58,7 +61,9 @@
 
   <div class="panel hidden" id="gameover">
     <h1 id="winnerText">🎉 Kazandı!</h1>
-    <button id="restartBtn">Yeniden Başa Dön</button>
+    <button id="playAgainBtn" class="hidden">Tekrar Oyna (Aynı Oda)</button>
+    <div class="hint hidden" id="gameoverWaitHint">Kurucunun tekrar başlatmasını bekle...</div>
+    <button id="restartBtn" class="secondary">Odadan Ayrıl</button>
   </div>
 </div>
 
@@ -434,11 +439,33 @@ function publicPlayers(){
   return Object.fromEntries(Object.entries(players).map(([id,p])=>[id,{color:p.color,zoneIdx:p.zoneIdx,name:p.name}]));
 }
 
+// ---------- Name & color picker (landing screen) ----------
+let selectedColorIdx=0;
+function renderColorPicker(){
+  const wrap=$('colorPicker'); wrap.innerHTML='';
+  COLORS.forEach((hex,i)=>{
+    const sw=document.createElement('div');
+    sw.style.width='34px'; sw.style.height='34px'; sw.style.borderRadius='50%'; sw.style.cursor='pointer';
+    sw.style.background='#'+hex.toString(16).padStart(6,'0');
+    sw.style.border=(i===selectedColorIdx)?'3px solid #fff':'3px solid transparent';
+    sw.title=COLOR_NAMES[i];
+    sw.onclick=()=>{ selectedColorIdx=i; renderColorPicker(); };
+    wrap.appendChild(sw);
+  });
+}
+renderColorPicker();
+function getMyName(fallback){
+  const v=$('nameInput').value.trim();
+  return v ? v.slice(0,12) : fallback;
+}
+
 // ---------- Networking setup ----------
 $('hostBtn').onclick=async ()=>{
   isHost=true; myId='host';
   roomCode=genRoomCode();
-  players={ host:{color:0, zoneIdx:0, x:ZONES[0].x, z:ZONES[0].z, holding:null, score:0, keys:{}, prevKeys:{}, name:'Kurucu'} };
+  const myName=getMyName('Kurucu');
+  const c=selectedColorIdx;
+  players={ host:{color:c, zoneIdx:c, x:ZONES[c].x, z:ZONES[c].z, holding:null, score:0, keys:{}, prevKeys:{}, name:myName} };
   $('roomCode').textContent=roomCode;
   $('roomCodeBox').classList.remove('hidden');
   $('startBtn').classList.remove('hidden');
@@ -455,13 +482,16 @@ async function pollJoinRequests(){
   try{
     const keys=await storeListKeys('koni:'+roomCode+':join:');
     let changed=false;
+    const usedColors=new Set(Object.values(players).map(p=>p.color));
     for(const k of keys){
       const cid=k.split(':').pop();
       if(!players[cid] && Object.keys(players).length<4){
         const data=await storeGet(k);
         if(data){
-          const idx=Object.keys(players).length;
-          players[cid]={color:idx, zoneIdx:idx, x:ZONES[idx].x, z:ZONES[idx].z, holding:null, score:0, keys:{}, prevKeys:{}, name:data.name||('Oyuncu '+(idx+1))};
+          let color=(data.color!=null && !usedColors.has(data.color)) ? data.color : [0,1,2,3].find(c=>!usedColors.has(c));
+          if(color===undefined) continue; // no free slot (shouldn't happen, capped at 4)
+          usedColors.add(color);
+          players[cid]={color, zoneIdx:color, x:ZONES[color].x, z:ZONES[color].z, holding:null, score:0, keys:{}, prevKeys:{}, name:data.name||('Oyuncu '+(Object.keys(players).length+1))};
           changed=true;
           if(!inputListeners[cid]){
             inputListeners[cid]=storeOnValue(kInput(cid), data=>{
@@ -480,7 +510,7 @@ $('joinBtn').onclick=async ()=>{
   const code=$('joinCode').value.trim().toUpperCase();
   if(!code) return;
   isHost=false; roomCode=code;
-  await storeSet(kJoin(myId), {name:'Oyuncu'});
+  await storeSet(kJoin(myId), {name:getMyName('Oyuncu'), color:selectedColorIdx});
   showPanel('lobby'); $('waitHint').classList.remove('hidden'); phase='lobby';
   pollLobbyAsClient();
   clientLobbyTimer=setInterval(pollLobbyAsClient, 1200);
@@ -692,6 +722,8 @@ let holdMismatchSince=null;
 const NET_SYNC_MS=180;
 let stateUnsub=null;
 function startClientNetworking(){
+  clientState=null; clientPrevState=null; predHolding=null; holdMismatchSince=null;
+  prevMyInteract=false; prevMyThrow=false;
   clientInputTimer=setInterval(()=>{
     if(phase==='playing') storeSet(kInput(myId), {keys: myKeys, yaw: camYaw});
   }, 100);
@@ -755,7 +787,42 @@ function endGame(name, colorIdx){
   hud.classList.add('hidden'); controlsHint.classList.add('hidden'); hideTouchControls();
   $('winnerText').textContent='🎉 '+name+' kazandı! ('+COLOR_NAMES[colorIdx]+')';
   showPanel('gameover');
+  if(isHost){
+    $('playAgainBtn').classList.remove('hidden');
+    $('gameoverWaitHint').classList.add('hidden');
+  } else {
+    $('playAgainBtn').classList.add('hidden');
+    $('gameoverWaitHint').classList.remove('hidden');
+    replayWatchTimer=setInterval(watchForReplay, 1200);
+  }
 }
+let replayWatchTimer=null;
+async function watchForReplay(){
+  if(phase!=='ended' || isHost) return;
+  try{
+    const lobby=await storeGet(kLobby());
+    if(lobby && lobby.started===false){
+      clearInterval(replayWatchTimer);
+      players=Object.fromEntries(Object.entries(lobby.players).map(([id,p])=>[id,{...p}]));
+      showPanel('lobby'); $('waitHint').classList.remove('hidden'); renderLobby(); phase='lobby';
+      pollLobbyAsClient();
+      clientLobbyTimer=setInterval(pollLobbyAsClient, 1200);
+    }
+  }catch(e){ console.error(e); }
+}
+$('playAgainBtn').onclick=async ()=>{
+  if(!isHost) return;
+  gameEnded=false;
+  Object.values(players).forEach(p=>{
+    p.score=0; p.holding=null; p.keys={}; p.prevKeys={};
+    p.x=ZONES[p.zoneIdx].x; p.z=ZONES[p.zoneIdx].z;
+  });
+  resetCones(Object.keys(players).length);
+  await storeSet(kLobby(), {players: publicPlayers(), started:false});
+  showPanel('lobby'); $('waitHint').classList.add('hidden'); $('startBtn').classList.remove('hidden'); renderLobby(); phase='lobby';
+  pollJoinRequests();
+  hostLobbyTimer=setInterval(pollJoinRequests, 1200);
+};
 
 // ---------- Render / scoreboard ----------
 function renderScoreboard(scores){
