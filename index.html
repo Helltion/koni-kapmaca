@@ -72,13 +72,14 @@
   <div class="scorebox" id="myColorBox"></div>
   <div class="scorebox" id="coneDebug" style="font-size:10px;"></div>
 </div>
-<div id="controlsHint" class="hidden">WASD: Hareket • Fare: Kamera (tıkla ve sürükle) • E: Al/Bırak • Space: Fırlat • C: Kamera Modu</div>
+<div id="controlsHint" class="hidden">WASD: Hareket • Fare: Kamera (tıkla ve sürükle) • E: Al/Bırak • F: Fırlat • Space: Zıpla • C: Kamera Modu</div>
 
 <div id="lookArea" class="hidden"></div>
 <div id="touchControls" class="hidden">
   <div id="joystickBase"><div id="joystickKnob"></div></div>
   <div id="touchButtons">
     <button class="tbtn" id="btnCam">🔄</button>
+    <button class="tbtn" id="btnJump">⬆️</button>
     <button class="tbtn" id="btnInteract">✋</button>
     <button class="tbtn" id="btnThrow">🎯</button>
   </div>
@@ -116,6 +117,8 @@ const ZONE_R = 4.2;
 const PICKUP_R = 2.9;
 const MOVE_SPEED = 7.5;
 const THROW_FORCE = 11;
+const JUMP_VELOCITY = 6.2;
+const GRAVITY = 17;
 const NEED_TO_WIN = 3;
 const COLORS = [0x3fb96a, 0x9b5de5, 0xe63946, 0x3a86ff];
 const COLOR_NAMES = ["Yeşil","Mor","Kırmızı","Mavi"];
@@ -132,7 +135,7 @@ const inputListeners={}; // cid -> unsubscribe fn, real-time input from clients 
 let hostLobbyTimer=null, clientLobbyTimer=null, hostSyncTimer=null, clientInputTimer=null, clientStateTimer=null;
 let phase='landing'; // landing, lobby, playing, ended
 
-const myKeys={up:false,down:false,left:false,right:false,interact:false,throw:false};
+const myKeys={up:false,down:false,left:false,right:false,interact:false,throw:false,jump:false};
 let myFacing={x:0,z:1};
 
 // ---------- UI refs ----------
@@ -177,18 +180,18 @@ function makeWoodTexture(){
   const cw=512, ch=512;
   const c=document.createElement('canvas'); c.width=cw; c.height=ch;
   const ctx=c.getContext('2d');
-  ctx.fillStyle='#d9b98a'; ctx.fillRect(0,0,cw,ch);
+  ctx.fillStyle='#8a5a34'; ctx.fillRect(0,0,cw,ch);
   const plankW=cw/6;
   for(let i=0;i<6;i++){
-    const shade=6+Math.floor(Math.random()*10);
-    ctx.fillStyle=`rgba(0,0,0,0.0${shade})`;
+    const shade=10+Math.floor(Math.random()*16);
+    ctx.fillStyle=`rgba(0,0,0,0.${shade})`;
     ctx.fillRect(i*plankW,0,plankW,ch);
     // plank seam line
-    ctx.fillStyle='rgba(90,60,30,0.35)';
+    ctx.fillStyle='rgba(40,24,10,0.5)';
     ctx.fillRect(i*plankW,0,2,ch);
     // subtle grain streaks
     for(let g=0;g<14;g++){
-      ctx.strokeStyle=`rgba(120,80,40,${0.05+Math.random()*0.08})`;
+      ctx.strokeStyle=`rgba(60,35,15,${0.08+Math.random()*0.1})`;
       ctx.lineWidth=1+Math.random()*1.5;
       const gx=i*plankW+Math.random()*plankW;
       ctx.beginPath(); ctx.moveTo(gx,0);
@@ -198,7 +201,7 @@ function makeWoodTexture(){
   }
   // horizontal cross-seams for a plank-board look
   for(let y=0;y<ch;y+=ch/4){
-    ctx.fillStyle='rgba(90,60,30,0.18)';
+    ctx.fillStyle='rgba(40,24,10,0.25)';
     ctx.fillRect(0,y,cw,1.5);
   }
   const tex=new THREE.CanvasTexture(c);
@@ -319,6 +322,20 @@ function ensurePlayerMesh(id, colorIdx){
   playerMeshes[id]=g;
   return g;
 }
+// group children order: [torso, head, armL, armR, legL, legR]
+function animateLimbs(mesh, moving, jumping){
+  const armL=mesh.children[2], armR=mesh.children[3], legL=mesh.children[4], legR=mesh.children[5];
+  if(jumping){
+    armL.rotation.x=-2.3; armR.rotation.x=-2.3;
+    legL.rotation.x=0.15; legR.rotation.x=-0.15;
+  } else if(moving){
+    const swing=Math.sin(performance.now()/1000*9)*0.55;
+    armL.rotation.x=swing; armR.rotation.x=-swing;
+    legL.rotation.x=-swing; legR.rotation.x=swing;
+  } else {
+    armL.rotation.x=0; armR.rotation.x=0; legL.rotation.x=0; legR.rotation.x=0;
+  }
+}
 
 // ---------- Touch controls ----------
 const isTouch = ('ontouchstart' in window) || navigator.maxTouchPoints>0;
@@ -353,9 +370,12 @@ if(isTouch){
   $('btnThrow').addEventListener('pointerdown', ()=>{ myKeys.throw=true; });
   $('btnThrow').addEventListener('pointerup', ()=>{ myKeys.throw=false; });
   $('btnThrow').addEventListener('pointercancel', ()=>{ myKeys.throw=false; });
+  $('btnJump').addEventListener('pointerdown', ()=>{ myKeys.jump=true; });
+  $('btnJump').addEventListener('pointerup', ()=>{ myKeys.jump=false; });
+  $('btnJump').addEventListener('pointercancel', ()=>{ myKeys.jump=false; });
   $('btnCam').addEventListener('pointerdown', ()=>{ cycleCamera(); });
 }
-function showTouchControlsIfNeeded(){ if(isTouch){ touchControls.classList.remove('hidden'); $('lookArea').classList.remove('hidden'); controlsHint.textContent='Joystick: Hareket • Sağ taraf sürükle: Kamera • ✋: Al/Bırak • 🎯: Fırlat • 🔄: Kamera Modu'; } }
+function showTouchControlsIfNeeded(){ if(isTouch){ touchControls.classList.remove('hidden'); $('lookArea').classList.remove('hidden'); controlsHint.textContent='Joystick: Hareket • Sağ taraf sürükle: Kamera • ✋: Al/Bırak • 🎯: Fırlat • ⬆️: Zıpla • 🔄: Kamera Modu'; } }
 function hideTouchControls(){ touchControls.classList.add('hidden'); $('lookArea').classList.add('hidden'); }
 
 // ---------- Input ----------
@@ -367,7 +387,8 @@ function setKey(code,val){
   if(['KeyA','ArrowLeft'].includes(code)) myKeys.left=val;
   if(['KeyD','ArrowRight'].includes(code)) myKeys.right=val;
   if(code==='KeyE') myKeys.interact=val;
-  if(code==='Space') myKeys.throw=val;
+  if(code==='KeyF') myKeys.throw=val;
+  if(code==='Space') myKeys.jump=val;
   if(code==='KeyC' && val) cycleCamera();
 }
 let cameraMode='third'; // third | first | top
@@ -520,7 +541,7 @@ $('hostBtn').onclick=async ()=>{
   roomCode=genRoomCode();
   const myName=getMyName('Kurucu');
   const c=selectedColorIdx;
-  players={ host:{color:c, zoneIdx:c, x:ZONES[c].x, z:ZONES[c].z, holding:null, score:0, keys:{}, prevKeys:{}, name:myName} };
+  players={ host:{color:c, zoneIdx:c, x:ZONES[c].x, z:ZONES[c].z, holding:null, score:0, keys:{}, prevKeys:{}, y:0, vy:0, name:myName} };
   $('roomCode').textContent=roomCode;
   $('roomCodeBox').classList.remove('hidden');
   $('startBtn').classList.remove('hidden');
@@ -546,7 +567,7 @@ async function pollJoinRequests(){
           let color=(data.color!=null && !usedColors.has(data.color)) ? data.color : [0,1,2,3].find(c=>!usedColors.has(c));
           if(color===undefined) continue; // no free slot (shouldn't happen, capped at 4)
           usedColors.add(color);
-          players[cid]={color, zoneIdx:color, x:ZONES[color].x, z:ZONES[color].z, holding:null, score:0, keys:{}, prevKeys:{}, name:data.name||('Oyuncu '+(Object.keys(players).length+1))};
+          players[cid]={color, zoneIdx:color, x:ZONES[color].x, z:ZONES[color].z, holding:null, score:0, keys:{}, prevKeys:{}, y:0, vy:0, name:data.name||('Oyuncu '+(Object.keys(players).length+1))};
           changed=true;
           if(!inputListeners[cid]){
             inputListeners[cid]=storeOnValue(kInput(cid), data=>{
@@ -628,7 +649,7 @@ function startGameClientView(){
     const sx=ZONES[me.zoneIdx].x, sz=ZONES[me.zoneIdx].z;
     camYaw=Math.atan2(-sx, -sz);
     camPos.set(sx-Math.sin(camYaw)*6, 3.2, sz-Math.cos(camYaw)*6);
-    predX=sx; predZ=sz;
+    predX=sx; predZ=sz; predY=0; predVY=0;
   }
   phase='playing';
 }
@@ -662,6 +683,12 @@ function hostTick(dt){
     p.z=Math.max(-ARENA+0.5,Math.min(ARENA-0.5, p.z+dir.z*MOVE_SPEED*dt));
     p.facing={x:Math.sin(yaw), z:Math.cos(yaw)};
     p.prevKeys=p.prevKeys||{};
+    // jump physics
+    p.y=p.y||0; p.vy=p.vy||0;
+    if(k.jump && !p.prevKeys.jump && p.y<=0.001){ p.vy=JUMP_VELOCITY; }
+    p.vy-=GRAVITY*dt;
+    p.y=Math.max(0, p.y+p.vy*dt);
+    if(p.y<=0){ p.y=0; p.vy=0; }
     // interact edge
     if(k.interact && !p.prevKeys.interact){
       if(p.holding===null){
@@ -717,7 +744,7 @@ function hostTick(dt){
     if(p.holding!==null){
       const c=cones[p.holding];
       const f=p.facing||{x:0,z:1};
-      c.body.position.set(p.x+f.x*1.1, 1.1, p.z+f.z*1.1);
+      c.body.position.set(p.x+f.x*1.1, 1.1+(p.y||0), p.z+f.z*1.1);
       c.body.velocity.set(0,0,0);
     }
   });
@@ -758,7 +785,7 @@ async function syncHostNetwork(){
   const state={
     phase: gameEnded? 'ended':'playing',
     winner: gameEnded ? Object.values(players).find(p=>p.score>=NEED_TO_WIN) : null,
-    players: Object.fromEntries(Object.entries(players).map(([id,p])=>[id,{x:p.x,z:p.z,color:p.color,zoneIdx:p.zoneIdx,score:p.score,name:p.name,holding:p.holding,facing:p.facing||{x:0,z:1}}])),
+    players: Object.fromEntries(Object.entries(players).map(([id,p])=>[id,{x:p.x,z:p.z,y:p.y||0,color:p.color,zoneIdx:p.zoneIdx,score:p.score,name:p.name,holding:p.holding,facing:p.facing||{x:0,z:1}}])),
     cones: cones.map(c=>({x:c.body.position.x,y:c.body.position.y,z:c.body.position.z,qx:c.body.quaternion.x,qy:c.body.quaternion.y,qz:c.body.quaternion.z,qw:c.body.quaternion.w, held:c.held}))
   };
   await storeSet(kState(), state);
@@ -771,6 +798,7 @@ let clientPrevState=null;
 let clientStateReceivedAt=0;
 let lastSnapshotInterval=180; // measured actual gap between snapshots, used for interpolation timing
 let predX=0, predZ=0;
+let predY=0, predVY=0, prevMyJump=false;
 let predHolding=null; // locally-predicted held cone index, for instant pickup/drop feedback
 let prevMyInteract=false, prevMyThrow=false;
 let holdMismatchSince=null;
@@ -778,6 +806,7 @@ const NET_SYNC_MS=180;
 let stateUnsub=null;
 function startClientNetworking(){
   clientState=null; clientPrevState=null; predHolding=null; holdMismatchSince=null;
+  predY=0; predVY=0; prevMyJump=false;
   prevMyInteract=false; prevMyThrow=false;
   clientInputTimer=setInterval(()=>{
     if(phase==='playing') storeSet(kInput(myId), {keys: myKeys, yaw: camYaw});
@@ -816,6 +845,12 @@ function clientPredictStep(dt){
   const dir=computeMoveDir(myKeys, camYaw);
   predX=Math.max(-ARENA+0.5,Math.min(ARENA-0.5, predX+dir.x*MOVE_SPEED*dt));
   predZ=Math.max(-ARENA+0.5,Math.min(ARENA-0.5, predZ+dir.z*MOVE_SPEED*dt));
+  // local jump prediction (mirrors host's physics so it feels instant)
+  if(myKeys.jump && !prevMyJump && predY<=0.001){ predVY=JUMP_VELOCITY; }
+  predVY-=GRAVITY*dt;
+  predY=Math.max(0, predY+predVY*dt);
+  if(predY<=0){ predY=0; predVY=0; }
+  prevMyJump=myKeys.jump;
   // locally predict pickup/drop so it feels instant, host will confirm/correct shortly after
   if(myKeys.interact && !prevMyInteract){
     if(predHolding===null && clientState){
@@ -869,7 +904,7 @@ $('playAgainBtn').onclick=async ()=>{
   if(!isHost) return;
   gameEnded=false;
   Object.values(players).forEach(p=>{
-    p.score=0; p.holding=null; p.keys={}; p.prevKeys={};
+    p.score=0; p.holding=null; p.keys={}; p.prevKeys={}; p.y=0; p.vy=0;
     p.x=ZONES[p.zoneIdx].x; p.z=ZONES[p.zoneIdx].z;
   });
   resetCones(Object.keys(players).length);
@@ -895,8 +930,11 @@ function renderFrame(){
   // update player meshes from authoritative `players`
   Object.entries(players).forEach(([id,p])=>{
     const m=ensurePlayerMesh(id, p.color);
-    m.position.set(p.x,0,p.z);
+    m.position.set(p.x,p.y||0,p.z);
     if(p.facing){ m.rotation.y=Math.atan2(p.facing.x,p.facing.z); }
+    const k=p.keys||{};
+    const moving=!!(k.up||k.down||k.left||k.right);
+    animateLimbs(m, moving, (p.y||0)>0.02);
   });
   cones.forEach(c=>{
     c.mesh.position.copy(c.body.position);
@@ -918,19 +956,23 @@ function renderFrameFromClientState(){
     try{
     const m=ensurePlayerMesh(id, p.color);
     if(id===myId){
-      m.position.set(predX,0,predZ);
+      m.position.set(predX,predY,predZ);
       const dir=computeMoveDir(myKeys, camYaw);
       if(dir.x||dir.z){ m.rotation.y=Math.atan2(dir.x,dir.z); }
       else if(p.facing){ m.rotation.y=Math.atan2(p.facing.x,p.facing.z); }
+      animateLimbs(m, !!(dir.x||dir.z), predY>0.02);
       return;
     }
     const prevP = clientPrevState && clientPrevState.players[id];
+    let moved=false;
     if(prevP){
-      m.position.set(lerp(prevP.x,p.x,t), 0, lerp(prevP.z,p.z,t));
+      m.position.set(lerp(prevP.x,p.x,t), lerp(prevP.y||0,p.y||0,t), lerp(prevP.z,p.z,t));
+      moved=Math.hypot(p.x-prevP.x, p.z-prevP.z)>0.01;
     } else {
-      m.position.set(p.x,0,p.z);
+      m.position.set(p.x,p.y||0,p.z);
     }
     if(p.facing){ m.rotation.y=Math.atan2(p.facing.x,p.facing.z); }
+    animateLimbs(m, moved, (p.y||0)>0.02);
     }catch(e){ console.error('player render skip', id, e); }
   });
   // ensure cones array length matches
@@ -955,7 +997,7 @@ function renderFrameFromClientState(){
   // if I'm holding a cone, draw it attached to my locally-predicted position (not the network-lagged one) so it doesn't trail behind my hand
   if(predHolding!=null && cones[predHolding]){
     const fx=Math.sin(camYaw), fz=Math.cos(camYaw);
-    cones[predHolding].mesh.position.set(predX+fx*1.1, 1.1, predZ+fz*1.1);
+    cones[predHolding].mesh.position.set(predX+fx*1.1, 1.1+predY, predZ+fz*1.1);
     cones[predHolding].mesh.rotation.set(0, camYaw, 0); // keep upright & facing-aligned locally, ignore stale network spin
   }
   renderScoreboard(clientState.players);
