@@ -277,16 +277,59 @@ function makeConeLabelTexture(){
   // faint diagonal shine stripes
   ctx.strokeStyle='rgba(255,255,255,0.05)'; ctx.lineWidth=18;
   for(let i=-2;i<8;i++){ ctx.beginPath(); ctx.moveTo(i*50,0); ctx.lineTo(i*50-120,ch); ctx.stroke(); }
+
+  // illustrated rolled chip (orange/red curled tube shape)
+  ctx.save();
+  ctx.translate(cw*0.28, ch*0.20);
+  ctx.rotate(-0.4);
+  const chipGrad=ctx.createLinearGradient(-40,-14,40,14);
+  chipGrad.addColorStop(0,'#e8632a'); chipGrad.addColorStop(0.5,'#f2864a'); chipGrad.addColorStop(1,'#c8451c');
+  ctx.fillStyle=chipGrad;
+  ctx.beginPath();
+  ctx.moveTo(-44,-6);
+  ctx.quadraticCurveTo(-10,-26,26,-14);
+  ctx.quadraticCurveTo(48,-6,46,10);
+  ctx.quadraticCurveTo(44,22,26,16);
+  ctx.quadraticCurveTo(0,8,-30,14);
+  ctx.quadraticCurveTo(-48,10,-44,-6);
+  ctx.closePath(); ctx.fill();
+  ctx.fillStyle='rgba(150,50,10,0.35)';
+  for(let s=0;s<5;s++){ ctx.beginPath(); ctx.ellipse(-25+s*15,-2+ (s%2?4:-4), 4,2, 0.5,0,Math.PI*2); ctx.fill(); }
+  ctx.restore();
+
+  // illustrated lime slice
+  ctx.save();
+  ctx.translate(cw*0.76, ch*0.22);
+  ctx.beginPath(); ctx.arc(0,0,26,0,Math.PI*2);
+  ctx.fillStyle='#bfe23a'; ctx.fill();
+  ctx.beginPath(); ctx.arc(0,0,21,0,Math.PI*2);
+  ctx.fillStyle='#e8f7a8'; ctx.fill();
+  ctx.strokeStyle='rgba(120,160,20,0.6)'; ctx.lineWidth=1.5;
+  for(let s=0;s<8;s++){
+    const ang=s/8*Math.PI*2;
+    ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(Math.cos(ang)*20, Math.sin(ang)*20); ctx.stroke();
+  }
+  ctx.beginPath(); ctx.arc(0,0,26,0,Math.PI*2);
+  ctx.strokeStyle='#7fae1e'; ctx.lineWidth=3; ctx.stroke();
+  ctx.restore();
+
+  // main wordmark: bold black fill + white outline
   ctx.textAlign='center';
-  ctx.fillStyle='#ffffff';
-  ctx.font='900 54px Arial';
-  ctx.fillText('PATOS', cw/2, ch*0.42);
+  ctx.font='900 66px Arial';
+  ctx.lineWidth=8; ctx.strokeStyle='#ffffff'; ctx.lineJoin='round';
+  ctx.strokeText('PATOS', cw/2, ch*0.46);
+  ctx.fillStyle='#000000';
+  ctx.fillText('PATOS', cw/2, ch*0.46);
+
   ctx.font='italic 900 34px Arial';
+  ctx.lineWidth=5; ctx.strokeStyle='#ffffff';
+  ctx.strokeText('rolls', cw/2, ch*0.58);
   ctx.fillStyle='#ffdf5e';
-  ctx.fillText('rolls', cw/2, ch*0.55);
+  ctx.fillText('rolls', cw/2, ch*0.58);
+
   ctx.font='bold 15px Arial';
   ctx.fillStyle='#ffdf5e';
-  ctx.fillText('CHILI & LIME', cw/2, ch*0.64);
+  ctx.fillText('CHILI & LIME', cw/2, ch*0.67);
   const tex=new THREE.CanvasTexture(c);
   return tex;
 }
