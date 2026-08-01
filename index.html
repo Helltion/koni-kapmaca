@@ -168,61 +168,65 @@ addEventListener('resize',()=>{
   renderer.setSize(innerWidth, innerHeight);
 });
 
-// procedural space skybox (stars, nebula clouds, stylized black hole — all drawn, no external images)
+// procedural fallback starfield (used instantly, and if the real photo fails to load e.g. offline)
 function makeSpaceTexture(){
   const cw=1024, ch=512;
   const c=document.createElement('canvas'); c.width=cw; c.height=ch;
   const ctx=c.getContext('2d');
   ctx.fillStyle='#04050c'; ctx.fillRect(0,0,cw,ch);
-
-  // soft nebula clouds
-  function nebula(x,y,r,color){
-    const g=ctx.createRadialGradient(x,y,0,x,y,r);
-    g.addColorStop(0,color+'55'); g.addColorStop(0.5,color+'22'); g.addColorStop(1,color+'00');
-    ctx.fillStyle=g; ctx.beginPath(); ctx.arc(x,y,r,0,Math.PI*2); ctx.fill();
-  }
-  nebula(cw*0.18,ch*0.28,180,'#5b2a8f');
-  nebula(cw*0.62,ch*0.62,220,'#1f3d7a');
-  nebula(cw*0.85,ch*0.2,140,'#8f2a5b');
-
-  // starfield
-  for(let i=0;i<650;i++){
+  for(let i=0;i<900;i++){
     const x=Math.random()*cw, y=Math.random()*ch;
     const r=Math.random()*1.3+0.2;
     const b=0.4+Math.random()*0.6;
     ctx.fillStyle=`rgba(255,255,255,${b})`;
     ctx.beginPath(); ctx.arc(x,y,r,0,Math.PI*2); ctx.fill();
   }
-  // a few bright twinkly stars with a tiny glow
-  for(let i=0;i<18;i++){
-    const x=Math.random()*cw, y=Math.random()*ch;
-    const g=ctx.createRadialGradient(x,y,0,x,y,6);
-    g.addColorStop(0,'rgba(255,255,255,0.9)'); g.addColorStop(1,'rgba(255,255,255,0)');
-    ctx.fillStyle=g; ctx.beginPath(); ctx.arc(x,y,6,0,Math.PI*2); ctx.fill();
-  }
-
-  // stylized black hole with glowing accretion disk
-  const bhX=cw*0.4, bhY=ch*0.42, bhR=34;
-  const disk=ctx.createRadialGradient(bhX,bhY,bhR*0.9,bhX,bhY,bhR*2.4);
-  disk.addColorStop(0,'rgba(255,210,140,0.9)');
-  disk.addColorStop(0.35,'rgba(255,140,60,0.55)');
-  disk.addColorStop(0.7,'rgba(120,60,160,0.18)');
-  disk.addColorStop(1,'rgba(120,60,160,0)');
-  ctx.save();
-  ctx.translate(bhX,bhY); ctx.scale(1,0.35);
-  ctx.fillStyle=disk; ctx.beginPath(); ctx.arc(0,0,bhR*2.4,0,Math.PI*2); ctx.fill();
-  ctx.restore();
-  ctx.fillStyle='#000000';
-  ctx.beginPath(); ctx.arc(bhX,bhY,bhR,0,Math.PI*2); ctx.fill();
-
-  const tex=new THREE.CanvasTexture(c);
-  return tex;
+  return new THREE.CanvasTexture(c);
 }
 const skyDome=new THREE.Mesh(
   new THREE.SphereGeometry(150,24,16),
-  new THREE.MeshBasicMaterial({map:makeSpaceTexture(), side:THREE.BackSide, fog:false})
+  new THREE.MeshBasicMaterial({map:makeSpaceTexture(), side:THREE.BackSide, fog:false, color:0x8a8fa8})
 );
 scene.add(skyDome);
+// swap in a real NASA public-domain star map (Gaia/Tycho catalog data) for genuine depth & realistic star brightness distribution — falls back silently to the procedural stars above if it can't load
+new THREE.TextureLoader().setCrossOrigin('anonymous').load(
+  'https://svs.gsfc.nasa.gov/vis/a000000/a004800/a004856/starmap_random_2020_4k_print.jpg',
+  (tex)=>{ skyDome.material.map=tex; skyDome.material.color.set(0xffffff); skyDome.material.needsUpdate=true; },
+  undefined,
+  (err)=>{ console.warn('NASA starfield failed to load, using procedural fallback', err); }
+);
+// stylized nebula + black hole accents (drawn, not photos) so there's a clear "wow" focal point regardless of the photo load
+function makeGlowSpriteTexture(drawFn){
+  const s=256; const c=document.createElement('canvas'); c.width=s; c.height=s;
+  const ctx=c.getContext('2d'); drawFn(ctx,s);
+  return new THREE.CanvasTexture(c);
+}
+function addSkySprite(tex, x,y,z, scale){
+  const spr=new THREE.Sprite(new THREE.SpriteMaterial({map:tex, transparent:true, depthWrite:false, fog:false}));
+  spr.position.set(x,y,z); spr.scale.set(scale,scale,1);
+  scene.add(spr);
+}
+addSkySprite(makeGlowSpriteTexture((ctx,s)=>{
+  const cx=s/2, cy=s/2, bhR=22;
+  const disk=ctx.createRadialGradient(cx,cy,bhR*0.9,cx,cy,bhR*3.2);
+  disk.addColorStop(0,'rgba(255,210,140,0.95)');
+  disk.addColorStop(0.35,'rgba(255,140,60,0.55)');
+  disk.addColorStop(0.7,'rgba(120,60,160,0.2)');
+  disk.addColorStop(1,'rgba(120,60,160,0)');
+  ctx.save(); ctx.translate(cx,cy); ctx.scale(1,0.3);
+  ctx.fillStyle=disk; ctx.beginPath(); ctx.arc(0,0,bhR*3.2,0,Math.PI*2); ctx.fill(); ctx.restore();
+  ctx.fillStyle='#000'; ctx.beginPath(); ctx.arc(cx,cy,bhR,0,Math.PI*2); ctx.fill();
+}), -70,42,-95, 46);
+addSkySprite(makeGlowSpriteTexture((ctx,s)=>{
+  const g=ctx.createRadialGradient(s/2,s/2,0,s/2,s/2,s/2);
+  g.addColorStop(0,'rgba(160,90,220,0.5)'); g.addColorStop(0.5,'rgba(90,60,160,0.22)'); g.addColorStop(1,'rgba(90,60,160,0)');
+  ctx.fillStyle=g; ctx.beginPath(); ctx.arc(s/2,s/2,s/2,0,Math.PI*2); ctx.fill();
+}), 85,55,-60, 90);
+addSkySprite(makeGlowSpriteTexture((ctx,s)=>{
+  const g=ctx.createRadialGradient(s/2,s/2,0,s/2,s/2,s/2);
+  g.addColorStop(0,'rgba(60,120,220,0.45)'); g.addColorStop(0.5,'rgba(40,90,180,0.2)'); g.addColorStop(1,'rgba(40,90,180,0)');
+  ctx.fillStyle=g; ctx.beginPath(); ctx.arc(s/2,s/2,s/2,0,Math.PI*2); ctx.fill();
+}), -50,25,90, 75);
 scene.fog=new THREE.Fog(0x04050c, 70, 155);
 
 const hemi=new THREE.HemisphereLight(0xaab4ff,0x0a0a14,0.7); scene.add(hemi);
